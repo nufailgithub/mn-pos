@@ -157,61 +157,114 @@ export async function POST(request: NextRequest) {
     const tax = subtotal * 0.0; // Configure tax rate
     const total = subtotal + tax - billDiscount;
 
+    // Calculate Payment and Balance
+    const totalPaid = validated.payments.reduce((sum, p) => p.method !== "CREDIT" && p.method !== "LOAN" ? sum + p.amount : sum, 0);
+    const creditAmount = validated.payments.reduce((sum, p) => p.method === "CREDIT" || p.method === "LOAN" ? sum + p.amount : sum, 0);
+    const balanceAmount = Math.max(0, total - (totalPaid + creditAmount));
+    
+    // Determine Status
+    let paymentStatus: "PAID" | "PARTIAL" | "PENDING" = "PAID";
+    if (balanceAmount > 0) {
+      paymentStatus = totalPaid > 0 ? "PARTIAL" : "PENDING";
+    }
+
+    // If there is any debt involved (Balance OR Credit Payment), Customer is REQUIRED
+    const totalDebtIncrease = balanceAmount + creditAmount;
+
+    let customerId = validated.customerId;
+
+    if (totalDebtIncrease > 0 && !customerId) {
+        if (!validated.customerName || !validated.customerPhone) {
+            return NextResponse.json(
+                { error: "Customer details (Name & Phone) are required for Credit sales." },
+                { status: 400 }
+            );
+        }
+    }
+
+
     // Generate sale number
     const saleNumber = `SALE-${Date.now()}`;
 
     // Create sale with items in transaction
     const sale = await prisma.$transaction(async (tx) => {
-      // Access sale model from transaction client
-      // If this fails, the Prisma client needs to be regenerated
-      const saleModel = (tx as any).sale;
-      if (!saleModel) {
-        console.error("Prisma transaction client missing 'sale' model. Available models:", Object.keys(tx));
-        throw new Error(
-          "Sale model not found in Prisma client. " +
-          "Please run 'npx prisma generate' in the client directory and restart your dev server."
-        );
+      // 1. Handle Customer Creation/Linking ONLY if debt is involved
+      if (totalDebtIncrease > 0 && !customerId && validated.customerName && validated.customerPhone) {
+          // Check if customer exists by phone
+          const existingCustomer = await tx.customer.findUnique({
+              where: { phone: validated.customerPhone }
+          });
+
+          if (existingCustomer) {
+              customerId = existingCustomer.id;
+          } else {
+              // Create new customer
+              const newCustomer = await tx.customer.create({
+                  data: {
+                      name: validated.customerName,
+                      phone: validated.customerPhone,
+                      totalDebt: 0
+                  }
+              });
+              customerId = newCustomer.id;
+          }
       }
-      
-      // Create sale
-      const newSale = await saleModel.create({
+
+      // 2. Create Sale
+      const newSale = await tx.sale.create({
         data: {
           saleNumber,
           subtotal,
           tax,
           discount: billDiscount,
           total,
-          paymentMethod: validated.paymentMethod,
+          balanceAmount, // Implicit credit (unpaid portion)
+          status: "COMPLETED",
+          paymentStatus: paymentStatus,
           cashierId,
+          customerId, // Link to customer if identified
           customerName: validated.customerName,
           customerPhone: validated.customerPhone,
           notes: validated.notes,
           saleItems: {
             create: saleItemsData,
           },
+          payments: {
+              create: validated.payments.map(p => ({
+                  amount: p.amount,
+                  method: p.method,
+                  reference: p.reference
+              }))
+          }
         },
         include: {
-          saleItems: {
-            include: {
-              product: {
-                include: {
-                  category: { select: { name: true } },
-                  subCategory: { select: { name: true } },
-                },
-              },
-            },
-          },
-          cashier: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-            },
-          },
-        },
+          saleItems: true,
+          payments: true,
+          customer: true
+        }
       });
+      
+      // 3. Update Customer Debt if any debt involved (Balance + Credit Payments)
+      if (totalDebtIncrease > 0 && customerId) {
+          await tx.customer.update({
+              where: { id: customerId },
+              data: {
+                  totalDebt: { increment: totalDebtIncrease }
+              }
+          });
 
-      // Update product stock based on size
+          await tx.customerTransaction.create({
+              data: {
+                  customerId: customerId,
+                  type: "DEBT_INC",
+                  amount: totalDebtIncrease,
+                  referenceId: newSale.id,
+                  description: `Credit Sale: ${saleNumber} (Bal: ${balanceAmount}, Credit: ${creditAmount})`
+              }
+          });
+      }
+
+      // 4. Update product stock based on size
       for (const item of validated.items) {
         const product = await tx.product.findUnique({
           where: { id: item.productId },

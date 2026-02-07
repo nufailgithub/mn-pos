@@ -7,6 +7,7 @@ datasource db {
   provider = "postgresql"
 }
 
+
 // User Management
 model User {
   id                     String    @id @default(cuid())
@@ -108,18 +109,65 @@ model ProductSize {
   @@map("product_sizes")
 }
 
+// Customers & Loans
+model Customer {
+  id          String   @id @default(cuid())
+  name        String
+  phone       String   @unique
+  email       String?
+  address     String?
+  totalDebt   Float    @default(0) // Current outstanding debt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sales        Sale[]
+  transactions CustomerTransaction[]
+
+  @@index([phone])
+  @@map("customers")
+}
+
+enum TransactionType {
+  DEBT_INC // Debt Increased (Credit Sale)
+  DEBT_DEC // Debt Decreased (Repayment)
+}
+
+model CustomerTransaction {
+  id          String          @id @default(cuid())
+  customerId  String
+  type        TransactionType
+  amount      Float
+  description String?
+  referenceId String?         // Link to Sale ID if applicable
+  date        DateTime        @default(now())
+  createdAt   DateTime        @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  @@index([customerId])
+  @@map("customer_transactions")
+}
+
 // Sales/Billing
 enum PaymentMethod {
   CASH
   CARD
   MOBILE
   BANK_TRANSFER
+  CREDIT
+  LOAN
 }
 
 enum SaleStatus {
   PENDING
   COMPLETED
   CANCELLED
+}
+
+enum PaymentStatus {
+  PAID
+  PARTIAL
+  PENDING
 }
 
 model Sale {
@@ -129,23 +177,43 @@ model Sale {
   tax           Float         @default(0)
   discount      Float         @default(0)
   total         Float
-  paymentMethod PaymentMethod
+  balanceAmount Float         @default(0) // Remaining amount to be paid (if any)
   status        SaleStatus    @default(COMPLETED)
+  paymentStatus PaymentStatus @default(PAID)
+  
   customerId    String?
-  customerName  String?
+  customerName  String?       // Keep for quick reference or walk-in customers
   customerPhone String?
+  
   cashierId     String
   notes         String?
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
-  cashier   User       @relation(fields: [cashierId], references: [id])
+  cashier   User          @relation(fields: [cashierId], references: [id])
+  customer  Customer?     @relation(fields: [customerId], references: [id])
   saleItems SaleItem[]
+  payments  SalePayment[]
 
   @@index([saleNumber])
   @@index([cashierId])
+  @@index([customerId])
   @@index([createdAt])
   @@map("sales")
+}
+
+model SalePayment {
+  id        String        @id @default(cuid())
+  saleId    String
+  amount    Float
+  method    PaymentMethod
+  reference String?       // e.g., Transaction ID for Card/Mobile
+  createdAt DateTime      @default(now())
+
+  sale Sale @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
+  @@map("sale_payments")
 }
 
 model SaleItem {
@@ -206,6 +274,41 @@ model StockAdjustment {
   @@index([adjustedBy])
   @@index([createdAt])
   @@map("stock_adjustments")
+}
+
+// Employee Management (Simplified)
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model Employee {
+  id          String         @id @default(cuid())
+  employeeId  String         @unique
+  name        String
+  phone       String?
+  basicSalary Float
+  status      EmployeeStatus @default(ACTIVE)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  advances SalaryAdvance[]
+
+  @@map("employees")
+}
+
+model SalaryAdvance {
+  id         String   @id @default(cuid())
+  employeeId String
+  amount     Float
+  date       DateTime @default(now())
+  note       String?
+  createdAt  DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@map("salary_advances")
 }
 
 // Password Reset Rate Limiting

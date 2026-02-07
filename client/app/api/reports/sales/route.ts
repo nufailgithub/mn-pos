@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { startOfDay, endOfDay, startOfMonth, endOfMonth, startOfYear, endOfYear } from "date-fns";
+import { SaleStatus } from "@prisma/client";
 
 // GET /api/reports/sales - Get sales report with summary
 export async function GET(request: NextRequest) {
@@ -54,7 +55,7 @@ export async function GET(request: NextRequest) {
         gte: dateRange.start,
         lte: dateRange.end,
       },
-      status: "COMPLETED",
+      status: SaleStatus.COMPLETED,
     };
 
     // Get sales with details
@@ -79,6 +80,7 @@ export async function GET(request: NextRequest) {
             },
           },
         },
+        payments: true, // Include payments
       },
       orderBy: {
         createdAt: "desc",
@@ -98,10 +100,15 @@ export async function GET(request: NextRequest) {
     };
 
     // Payment method breakdown
-    const paymentMethods = sales.reduce((acc, sale) => {
-      acc[sale.paymentMethod] = (acc[sale.paymentMethod] || 0) + sale.total;
-      return acc;
-    }, {} as Record<string, number>);
+    // Since we can have multiple payments per sale, we sum up amounts per method from all payments
+    const paymentMethods: Record<string, number> = {};
+    
+    sales.forEach(sale => {
+        sale.payments.forEach(payment => {
+            const method = payment.method;
+            paymentMethods[method] = (paymentMethods[method] || 0) + payment.amount;
+        });
+    });
 
     // Top products by quantity sold
     const productSales: Record<string, { name: string; quantity: number; revenue: number }> = {};
