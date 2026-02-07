@@ -2,7 +2,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
-import { Prisma, Customer, CustomerTransaction, Sale } from "@prisma/client";
+import { Customer, CustomerTransaction, Sale } from "@prisma/client";
 
 export type CustomerStatus = "ACTIVE" | "INACTIVE"; // Logic-level status
 
@@ -75,7 +75,7 @@ export async function getCustomers(hasDebtOnly: boolean = false) {
   }
 }
 
-// Get customer details including transaction history
+// Get customer details including transaction history and sales with payments (for per-bill paid/credit/balance)
 export async function getCustomerById(id: string) {
   try {
     const customer = await prisma.customer.findUnique({
@@ -83,11 +83,14 @@ export async function getCustomerById(id: string) {
       include: {
         transactions: {
           orderBy: { date: "desc" },
-          take: 20,
+          take: 50,
         },
         sales: {
           orderBy: { createdAt: "desc" },
-          take: 5,
+          take: 50,
+          include: {
+            payments: true,
+          },
         },
       },
     });
@@ -122,18 +125,16 @@ export async function addCustomerPayment(
       return { success: false, error: "Customer not found" };
     }
 
-    if (customer.totalDebt < amount) {
-        // Optional: Allow overpayment? For now, restrict.
-        // Or specific logic. Let's strictly block paying more than debt for simplicity or warn.
-        // Logic: just update.
-    }
+    // If paying more than debt, excess goes to reducing advance (we owe them less)
+    const debtReduction = Math.min(amount, customer.totalDebt);
+    const advanceReduction = Math.max(0, amount - debtReduction);
 
-    // Transaction to update debt and log transaction
     await prisma.$transaction([
       prisma.customer.update({
         where: { id: customerId },
         data: {
-          totalDebt: { decrement: amount },
+          ...(debtReduction > 0 && { totalDebt: { decrement: debtReduction } }),
+          ...(advanceReduction > 0 && { totalAdvance: { decrement: advanceReduction } }),
         },
       }),
       prisma.customerTransaction.create({

@@ -79,7 +79,52 @@ export type ProductReport = {
   }>;
 };
 
+export type BillingReport = {
+  dateRange: { start: string; end: string };
+  paymentSummary: { cashPayments: number; bankPayments: number; creditSales: number };
+  customerBalances: {
+    totalDue: number;
+    totalAdvance: number;
+    customers: Array<{ id: string; name: string; phone: string; due: number; advance: number }>;
+  };
+};
+
+export type EmployeeReport = {
+  month: string;
+  monthLabel: string;
+  summary: { totalSalary: number; totalPaid: number; totalPending: number };
+  employees: Array<{
+    id: string;
+    employeeId: string;
+    name: string;
+    monthlySalary: number;
+    paid: number;
+    pending: number;
+    salaryPayments: unknown[];
+  }>;
+};
+
 export const reportsApi = {
+  getBillingReport: async (params?: {
+    startDate?: string;
+    endDate?: string;
+    period?: "today" | "week" | "month" | "year" | "custom";
+  }): Promise<BillingReport> => {
+    const searchParams = new URLSearchParams();
+    if (params?.startDate) searchParams.set("startDate", params.startDate);
+    if (params?.endDate) searchParams.set("endDate", params.endDate);
+    if (params?.period) searchParams.set("period", params.period);
+    const q = searchParams.toString();
+    return api.get<BillingReport>(`/api/reports/billing${q ? `?${q}` : ""}`);
+  },
+
+  getEmployeeReport: async (params?: { month?: string }): Promise<EmployeeReport> => {
+    const searchParams = new URLSearchParams();
+    if (params?.month) searchParams.set("month", params.month);
+    const q = searchParams.toString();
+    return api.get<EmployeeReport>(`/api/reports/employees${q ? `?${q}` : ""}`);
+  },
+
   /**
    * Get sales report
    */

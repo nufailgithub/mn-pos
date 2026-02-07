@@ -108,19 +108,12 @@ export default function NewBillPage() {
           toast.error("Please enter a valid amount");
           return;
       }
-      
-      if (amount > billSummary.balance + 1) { // Allow slight floating point tolerance
-           toast.error(`Amount exceeds balance. Remaining: ${billSummary.balance}`);
-           return;
-      }
-
-      setPayments([...payments, { 
-          method: currentPaymentMethod, 
-          amount, 
-          reference: currentPaymentReference 
+      // Allow overpayment: amount can exceed balance (change will be added as customer advance)
+      setPayments([...payments, {
+          method: currentPaymentMethod,
+          amount,
+          reference: currentPaymentReference
       }]);
-      
-      // Reset inputs
       setCurrentPaymentAmount("");
       setCurrentPaymentReference("");
   };
@@ -250,19 +243,15 @@ export default function NewBillPage() {
       return;
     }
 
-    // Validate Credit Sale (Loan)
-    // Validate Credit Sale
-    const hasCreditPayment = payments.some(p => p.method === "CREDIT");
-    const isCreditSale = billSummary.balance > 0 || hasCreditPayment;
-
-    if (isCreditSale) {
-        if (!customerName || !customerPhone) {
-            toast.error("Customer Name and Phone are required for Credit sales.");
-            return;
-        }
+    // Customer required only when credit is used (balance left as credit or Credit payment selected)
+    const needsCustomer = billSummary.balance > 0 || payments.some(p => p.method === "CREDIT");
+    if (needsCustomer && (!customerName?.trim() || !customerPhone?.trim())) {
+      toast.error("Customer name and phone are required when using Credit payment.");
+      return;
     }
 
     try {
+      const paymentsList = Array.isArray(payments) ? payments : [];
       const saleData = {
         items: billItems.map(item => ({
              productId: item.productId,
@@ -272,8 +261,8 @@ export default function NewBillPage() {
              size: item.size,
              discountType: item.discount > 0 ? item.discountType : undefined
         })),
-        payments: payments.map(p => ({
-            method: p.method as any,
+        payments: paymentsList.map(p => ({
+            method: p.method as "CASH" | "BANK_TRANSFER" | "CARD" | "MOBILE" | "CREDIT",
             amount: p.amount,
             reference: p.reference
         })),
@@ -537,10 +526,10 @@ export default function NewBillPage() {
             <Card>
               <CardHeader><CardTitle>Payment & Checkout</CardTitle></CardHeader>
               <CardContent className="space-y-4">
-                {/* Customer Info */}
+                {/* Customer Info - required only when Credit payment is used */}
                 <div className="space-y-2">
-                  <Input placeholder="Customer Name (Required for Credit)" value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
-                  <Input placeholder="Customer Phone (Required for Credit)" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} />
+                  <Input placeholder="Customer Name (required for credit only)" value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
+                  <Input placeholder="Customer Phone (required for credit only)" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} />
                 </div>
 
                 {/* Bill Discount */}
@@ -560,11 +549,10 @@ export default function NewBillPage() {
                             <SelectTrigger><SelectValue /></SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="CASH">Cash</SelectItem>
+                                <SelectItem value="BANK_TRANSFER">Bank / UPI</SelectItem>
                                 <SelectItem value="CARD">Card</SelectItem>
                                 <SelectItem value="MOBILE">Mobile</SelectItem>
-                                <SelectItem value="BANK_TRANSFER">Bank</SelectItem>
-                                <SelectItem value="CREDIT">Credit</SelectItem>
-                                {/* Removed LOAN option per user request */}
+                                <SelectItem value="CREDIT">Credit (remaining)</SelectItem>
                             </SelectContent>
                         </Select>
                         <Input 

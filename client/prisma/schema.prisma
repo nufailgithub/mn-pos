@@ -111,14 +111,17 @@ model ProductSize {
 
 // Customers & Loans
 model Customer {
-  id          String   @id @default(cuid())
-  name        String
-  phone       String   @unique
-  email       String?
-  address     String?
-  totalDebt   Float    @default(0) // Current outstanding debt
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id              String   @id @default(cuid())
+  name            String
+  phone           String   @unique
+  email           String?
+  address         String?
+  totalDebt       Float    @default(0) // Amount customer owes (due)
+  totalAdvance    Float    @default(0) // Overpayment / advance (we owe customer)
+  totalPurchases  Float    @default(0) // Sum of all sale totals linked to customer
+  totalPaid       Float    @default(0) // Sum of amounts paid (cash/bank) on their bills
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   sales        Sale[]
   transactions CustomerTransaction[]
@@ -128,8 +131,10 @@ model Customer {
 }
 
 enum TransactionType {
-  DEBT_INC // Debt Increased (Credit Sale)
-  DEBT_DEC // Debt Decreased (Repayment)
+  DEBT_INC   // Debt Increased (Credit Sale)
+  DEBT_DEC   // Debt Decreased (Repayment)
+  ADVANCE_INC // Advance Increased (Overpayment added as customer credit)
+  ADVANCE_DEC // Advance Decreased (e.g. used against next bill)
 }
 
 model CustomerTransaction {
@@ -155,7 +160,7 @@ enum PaymentMethod {
   MOBILE
   BANK_TRANSFER
   CREDIT
-  LOAN
+  LOAN // Kept for backward compatibility; not shown in UI
 }
 
 enum SaleStatus {
@@ -284,15 +289,16 @@ enum EmployeeStatus {
 
 model Employee {
   id          String         @id @default(cuid())
-  employeeId  String         @unique
+  employeeId  String         @unique // Auto-generated (e.g. EMP-001)
   name        String
   phone       String?
-  basicSalary Float
+  basicSalary Float          @map("basic_salary") // Monthly salary
   status      EmployeeStatus @default(ACTIVE)
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
 
-  advances SalaryAdvance[]
+  advances       SalaryAdvance[]
+  salaryPayments SalaryPayment[]
 
   @@map("employees")
 }
@@ -309,6 +315,22 @@ model SalaryAdvance {
 
   @@index([employeeId])
   @@map("salary_advances")
+}
+
+// Salary payments (partial or full) per month
+model SalaryPayment {
+  id         String   @id @default(cuid())
+  employeeId String
+  amount     Float
+  forMonth   DateTime @map("for_month") // First day of the month this payment is for
+  note       String?
+  createdAt  DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@index([forMonth])
+  @@map("salary_payments")
 }
 
 // Password Reset Rate Limiting

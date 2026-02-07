@@ -74,8 +74,6 @@ export async function GET(request: NextRequest) {
         pages: Math.ceil(total / limit),
       },
     });
-
-    return NextResponse.json(sales);
   } catch (error) {
     console.error("Error fetching sales:", error);
     return NextResponse.json(
@@ -91,26 +89,26 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const validated = createSaleSchema.parse(body);
 
-    // Get user ID from session
+    // Get a valid cashier user ID (must exist in users table for foreign key)
     const session = await auth();
-    let cashierId: string;
-    
+    let cashierId: string | null = null;
     if (session?.user?.id) {
-      cashierId = session.user.id;
-    } else {
-      // Fallback: Get first active user or create a default
+      const sessionUser = await prisma.user.findUnique({
+        where: { id: session.user.id, isActive: true },
+      });
+      if (sessionUser) cashierId = sessionUser.id;
+    }
+    if (!cashierId) {
       const defaultUser = await prisma.user.findFirst({
         where: { isActive: true },
         orderBy: { createdAt: "asc" },
       });
-      
       if (!defaultUser) {
         return NextResponse.json(
-          { error: "No active user found. Please create a user first." },
+          { error: "No active user found. Please log in or create a user first." },
           { status: 400 }
         );
       }
-      
       cashierId = defaultUser.id;
     }
 
@@ -157,29 +155,29 @@ export async function POST(request: NextRequest) {
     const tax = subtotal * 0.0; // Configure tax rate
     const total = subtotal + tax - billDiscount;
 
-    // Calculate Payment and Balance
-    const totalPaid = validated.payments.reduce((sum, p) => p.method !== "CREDIT" && p.method !== "LOAN" ? sum + p.amount : sum, 0);
-    const creditAmount = validated.payments.reduce((sum, p) => p.method === "CREDIT" || p.method === "LOAN" ? sum + p.amount : sum, 0);
-    const balanceAmount = Math.max(0, total - (totalPaid + creditAmount));
-    
-    // Determine Status
+    const paymentsList = Array.isArray(validated.payments) ? validated.payments : [];
+    const totalPaidCashBank = paymentsList.reduce((sum, p) => (p.method !== "CREDIT" ? sum + p.amount : sum), 0);
+    const creditAmount = paymentsList.reduce((sum, p) => (p.method === "CREDIT" ? sum + p.amount : sum), 0);
+    const totalPaid = totalPaidCashBank + creditAmount;
+    const balanceAmount = Math.max(0, total - totalPaid);
+    const overpaymentAmount = Math.max(0, totalPaid - total); // Change → customer advance
+
     let paymentStatus: "PAID" | "PARTIAL" | "PENDING" = "PAID";
     if (balanceAmount > 0) {
       paymentStatus = totalPaid > 0 ? "PARTIAL" : "PENDING";
     }
 
-    // If there is any debt involved (Balance OR Credit Payment), Customer is REQUIRED
-    const totalDebtIncrease = balanceAmount + creditAmount;
-
+    // Customer required only when credit is used (balance > 0). Overpayment = change given in cash, no customer needed.
+    const needsCustomer = balanceAmount > 0;
     let customerId = validated.customerId;
 
-    if (totalDebtIncrease > 0 && !customerId) {
-        if (!validated.customerName || !validated.customerPhone) {
-            return NextResponse.json(
-                { error: "Customer details (Name & Phone) are required for Credit sales." },
-                { status: 400 }
-            );
-        }
+    if (needsCustomer && !customerId) {
+      if (!validated.customerName?.trim() || !validated.customerPhone?.trim()) {
+        return NextResponse.json(
+          { error: "Customer name and phone are required when using Credit payment." },
+          { status: 400 }
+        );
+      }
     }
 
 
@@ -188,26 +186,26 @@ export async function POST(request: NextRequest) {
 
     // Create sale with items in transaction
     const sale = await prisma.$transaction(async (tx) => {
-      // 1. Handle Customer Creation/Linking ONLY if debt is involved
-      if (totalDebtIncrease > 0 && !customerId && validated.customerName && validated.customerPhone) {
-          // Check if customer exists by phone
-          const existingCustomer = await tx.customer.findUnique({
-              where: { phone: validated.customerPhone }
+      // 1. Resolve or create customer when needed (credit or overpayment)
+      if (needsCustomer && !customerId && validated.customerName?.trim() && validated.customerPhone?.trim()) {
+        const existingCustomer = await tx.customer.findUnique({
+          where: { phone: validated.customerPhone.trim() },
+        });
+        if (existingCustomer) {
+          customerId = existingCustomer.id;
+        } else {
+          const newCustomer = await tx.customer.create({
+            data: {
+              name: validated.customerName.trim(),
+              phone: validated.customerPhone.trim(),
+              totalDebt: 0,
+              totalAdvance: 0,
+              totalPurchases: 0,
+              totalPaid: 0,
+            },
           });
-
-          if (existingCustomer) {
-              customerId = existingCustomer.id;
-          } else {
-              // Create new customer
-              const newCustomer = await tx.customer.create({
-                  data: {
-                      name: validated.customerName,
-                      phone: validated.customerPhone,
-                      totalDebt: 0
-                  }
-              });
-              customerId = newCustomer.id;
-          }
+          customerId = newCustomer.id;
+        }
       }
 
       // 2. Create Sale
@@ -218,50 +216,65 @@ export async function POST(request: NextRequest) {
           tax,
           discount: billDiscount,
           total,
-          balanceAmount, // Implicit credit (unpaid portion)
+          balanceAmount,
           status: "COMPLETED",
-          paymentStatus: paymentStatus,
+          paymentStatus,
           cashierId,
-          customerId, // Link to customer if identified
-          customerName: validated.customerName,
-          customerPhone: validated.customerPhone,
+          customerId: customerId ?? undefined,
+          customerName: validated.customerName ?? undefined,
+          customerPhone: validated.customerPhone ?? undefined,
           notes: validated.notes,
-          saleItems: {
-            create: saleItemsData,
-          },
+          saleItems: { create: saleItemsData },
           payments: {
-              create: validated.payments.map(p => ({
-                  amount: p.amount,
-                  method: p.method,
-                  reference: p.reference
-              }))
-          }
+            create: paymentsList.map((p) => ({
+              amount: p.amount,
+              method: p.method,
+              reference: p.reference,
+            })),
+          },
         },
         include: {
           saleItems: true,
           payments: true,
-          customer: true
-        }
+          customer: true,
+        },
       });
-      
-      // 3. Update Customer Debt if any debt involved (Balance + Credit Payments)
-      if (totalDebtIncrease > 0 && customerId) {
-          await tx.customer.update({
-              where: { id: customerId },
-              data: {
-                  totalDebt: { increment: totalDebtIncrease }
-              }
-          });
 
+      // 3. Update customer only when linked (required for credit). Overpayment without customer = change given in cash, no advance stored.
+      if (customerId) {
+        const updates: { totalPurchases?: { increment: number }; totalPaid?: { increment: number }; totalDebt?: { increment: number }; totalAdvance?: { increment: number } } = {};
+        updates.totalPurchases = { increment: total };
+        updates.totalPaid = { increment: totalPaidCashBank };
+
+        if (balanceAmount > 0) {
+          updates.totalDebt = { increment: balanceAmount };
           await tx.customerTransaction.create({
-              data: {
-                  customerId: customerId,
-                  type: "DEBT_INC",
-                  amount: totalDebtIncrease,
-                  referenceId: newSale.id,
-                  description: `Credit Sale: ${saleNumber} (Bal: ${balanceAmount}, Credit: ${creditAmount})`
-              }
+            data: {
+              customerId,
+              type: "DEBT_INC",
+              amount: balanceAmount,
+              referenceId: newSale.id,
+              description: `Credit Sale: ${newSale.saleNumber} — Balance Rs. ${balanceAmount.toLocaleString()}`,
+            },
           });
+        }
+        // Only add overpayment to customer advance when customer was provided (optional: they chose to keep balance as advance)
+        if (overpaymentAmount > 0) {
+          updates.totalAdvance = { increment: overpaymentAmount };
+          await tx.customerTransaction.create({
+            data: {
+              customerId,
+              type: "ADVANCE_INC",
+              amount: overpaymentAmount,
+              referenceId: newSale.id,
+              description: `Overpayment (advance): ${newSale.saleNumber} — Rs. ${overpaymentAmount.toLocaleString()}`,
+            },
+          });
+        }
+        await tx.customer.update({
+          where: { id: customerId },
+          data: updates,
+        });
       }
 
       // 4. Update product stock based on size
