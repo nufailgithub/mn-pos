@@ -88,7 +88,7 @@ export default function EditProductPage() {
   const [barcodeDialogOpen, setBarcodeDialogOpen] = useState(false);
 
   const form = useForm<ProductFormValues>({
-    resolver: zodResolver(updateProductSchema),
+    resolver: zodResolver(updateProductSchema) as any,
     defaultValues: {
       name: "",
       productId: "",

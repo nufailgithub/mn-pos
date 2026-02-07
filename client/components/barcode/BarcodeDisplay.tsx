@@ -26,6 +26,7 @@ export function BarcodeDisplay({ barcode, productName, open, onOpenChange }: Bar
       // Dynamically import jsbarcode only when needed
       import("jsbarcode")
         .then((JsBarcode) => {
+          if (!canvasRef.current) return;
           try {
             // Set canvas size for proper barcode rendering
             canvasRef.current.width = 600;

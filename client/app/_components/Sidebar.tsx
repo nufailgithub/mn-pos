@@ -12,7 +12,9 @@ import {
   FileText,
   BarChart3,
   Layers2,
-  ReceiptText
+  ReceiptText,
+  Contact,
+  Briefcase
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import Logo from "@/company/logo";
@@ -21,6 +23,8 @@ const menuItems = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/dashboard" },
   { icon: Package, label: "Products", path: "/products" },
   { icon: ReceiptText, label: "New Bill", path: "/new-bill" },
+  { icon: Contact, label: "Customers", path: "/customers" },
+  { icon: Briefcase, label: "Employees", path: "/employees" },
   { icon: Layers2, label: "Stock", path: "/stock" },
   { icon: BarChart3, label: "Reports", path: "/reports" },
   { icon: Users, label: "Users", path: "/users" },

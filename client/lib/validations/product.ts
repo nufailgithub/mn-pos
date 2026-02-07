@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const productSizeSchema = z.object({
   size: z.string(),
-  quantity: z.number().int().min(0).default(0),
+  quantity: z.number().int().min(0),
 });
 
 export const createProductSchema = z.object({
