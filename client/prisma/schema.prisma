@@ -1,0 +1,239 @@
+generator client {
+  provider = "prisma-client-js"
+  engineType = "library"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// User Management
+model User {
+  id                     String    @id @default(cuid())
+  email                  String    @unique
+  name                   String
+  password               String
+  role                   UserRole  @default(CASHIER)
+  isActive               Boolean   @default(true)
+  passwordResetToken     String?   @unique
+  passwordResetExpires   DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  sales                  Sale[]
+  stockAdjustments       StockAdjustment[]
+
+  @@index([email])
+  @@index([passwordResetToken])
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  CASHIER
+}
+
+// Product Categories
+model Category {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime @updatedAt
+
+  products Product[]
+  subCategories SubCategory[]
+
+  @@map("categories")
+}
+
+// Sub Categories
+model SubCategory {
+  id          String    @id @default(cuid())
+  name        String
+  categoryId  String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime @updatedAt
+
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  products Product[]
+
+  @@unique([name, categoryId])
+  @@map("sub_categories")
+}
+
+// Products/Inventory
+model Product {
+  id              String   @id @default(cuid())
+  name            String
+  productId       String   @unique @map("product_id")
+  sku             String   @unique
+  barcode         String?  @unique
+  categoryId      String
+  subCategoryId   String?
+  costPrice       Float    @map("cost_price")
+  sellingPrice    Float    @map("selling_price")
+  brand           String?
+  stockAlertLimit Int      @default(10) @map("stock_alert_limit")
+  freeSize        Boolean  @default(false) @map("free_size")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  category    Category    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  subCategory SubCategory? @relation(fields: [subCategoryId], references: [id], onDelete: SetNull)
+  productSizes ProductSize[]
+  saleItems   SaleItem[]
+  stockAdjustments StockAdjustment[]
+
+  @@index([categoryId])
+  @@index([subCategoryId])
+  @@index([productId])
+  @@index([sku])
+  @@index([barcode])
+  @@map("products")
+}
+
+// Product Sizes and Quantities
+model ProductSize {
+  id        String   @id @default(cuid())
+  productId String
+  size      String
+  quantity  Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  stockAdjustments StockAdjustment[]
+
+  @@unique([productId, size])
+  @@map("product_sizes")
+}
+
+// Sales/Billing
+enum PaymentMethod {
+  CASH
+  CARD
+  MOBILE
+  BANK_TRANSFER
+}
+
+enum SaleStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
+model Sale {
+  id            String        @id @default(cuid())
+  saleNumber    String        @unique
+  subtotal      Float
+  tax           Float         @default(0)
+  discount      Float         @default(0)
+  total         Float
+  paymentMethod PaymentMethod
+  status        SaleStatus    @default(COMPLETED)
+  customerId    String?
+  customerName  String?
+  customerPhone String?
+  cashierId     String
+  notes         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  cashier   User       @relation(fields: [cashierId], references: [id])
+  saleItems SaleItem[]
+
+  @@index([saleNumber])
+  @@index([cashierId])
+  @@index([createdAt])
+  @@map("sales")
+}
+
+model SaleItem {
+  id        String   @id @default(cuid())
+  saleId    String
+  productId String
+  size      String?  // Size for sized products, null for free size
+  quantity  Int
+  price     Float    // Price per unit at time of sale
+  discount  Float    @default(0) // Discount amount for this item
+  discountType String? // "PERCENTAGE" or "AMOUNT"
+  subtotal  Float    // (price * quantity) - discount
+  createdAt DateTime @default(now())
+
+  sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([saleId])
+  @@index([productId])
+  @@map("sale_items")
+}
+
+// Stock Adjustments
+enum StockAdjustmentType {
+  ADD
+  REDUCE
+}
+
+enum StockAdjustmentReason {
+  NEW_STOCK_ARRIVAL
+  DAMAGED_ITEM
+  LOST_THEFT
+  MANUAL_CORRECTION
+  RETURN_FROM_CUSTOMER
+  OTHER
+}
+
+model StockAdjustment {
+  id            String                @id @default(cuid())
+  productId     String
+  productSizeId String?               // null for free size products
+  size          String?                // Size name for reference
+  type          StockAdjustmentType
+  quantity      Int                   // Positive number (absolute value)
+  reason        StockAdjustmentReason
+  reasonNote    String?               // Additional notes
+  beforeQty     Int                   // Quantity before adjustment
+  afterQty      Int                   // Quantity after adjustment
+  adjustedBy    String                // User ID who made the adjustment
+  createdAt     DateTime              @default(now())
+
+  product     Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productSize ProductSize? @relation(fields: [productSizeId], references: [id], onDelete: Cascade)
+  adjustedByUser User      @relation(fields: [adjustedBy], references: [id])
+
+  @@index([productId])
+  @@index([productSizeId])
+  @@index([adjustedBy])
+  @@index([createdAt])
+  @@map("stock_adjustments")
+}
+
+// Password Reset Rate Limiting
+model PasswordResetAttempt {
+  id          String   @id @default(cuid())
+  email       String
+  attemptedAt DateTime @default(now())
+  ipAddress   String?
+  userAgent   String?
+
+  @@index([email])
+  @@index([attemptedAt])
+  @@map("password_reset_attempts")
+}
+
+// Security Audit Logs
+model AuditLog {
+  id          String   @id @default(cuid())
+  action      String   // PASSWORD_RESET_REQUESTED, PASSWORD_RESET_COMPLETED, LOGIN_FAILED, etc.
+  userId      String?
+  email       String?
+  ipAddress   String?
+  userAgent   String?
+  details     String?  // JSON string for additional info
+  createdAt   DateTime @default(now())
+
+  @@index([action])
+  @@index([email])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
