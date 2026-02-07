@@ -7,6 +7,7 @@ import {
     createEmployee, 
     updateEmployee, 
     addSalaryAdvance,
+    recordSalaryPayment,
     type EmployeeWithAdvances
 } from "@/app/actions/employee";
 import { Button } from "@/components/ui/button";
@@ -34,7 +35,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Search, Plus, DollarSign, UserPlus, Pencil, Wallet } from "lucide-react";
+import { Search, UserPlus, Pencil, Wallet, Calendar, Banknote } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { Badge } from "@/components/ui/badge";
@@ -48,7 +49,6 @@ export default function EmployeesClient() {
   const [employeeDialogOpen, setEmployeeDialogOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<EmployeeWithAdvances | null>(null);
   const [formData, setFormData] = useState({
-      employeeId: "",
       name: "",
       phone: "",
       basicSalary: ""
@@ -61,6 +61,16 @@ export default function EmployeesClient() {
   const [advanceAmount, setAdvanceAmount] = useState("");
   const [advanceNote, setAdvanceNote] = useState("");
   const [advanceSubmitting, setAdvanceSubmitting] = useState(false);
+
+  // Salary Payment Dialog State
+  const [salaryPaymentDialogOpen, setSalaryPaymentDialogOpen] = useState(false);
+  const [salaryForMonth, setSalaryForMonth] = useState("");
+  const [salaryPaymentAmount, setSalaryPaymentAmount] = useState("");
+  const [salaryPaymentNote, setSalaryPaymentNote] = useState("");
+  const [salaryPaymentSubmitting, setSalaryPaymentSubmitting] = useState(false);
+
+  // Salary History (per employee) - shown in dialog
+  const [salaryHistoryOpen, setSalaryHistoryOpen] = useState(false);
 
   const fetchEmployees = async () => {
     setLoading(true);
@@ -89,14 +99,13 @@ export default function EmployeesClient() {
 
   const handleOpenCreate = () => {
       setEditingEmployee(null);
-      setFormData({ employeeId: "", name: "", phone: "", basicSalary: "" });
+      setFormData({ name: "", phone: "", basicSalary: "" });
       setEmployeeDialogOpen(true);
   };
 
   const handleOpenEdit = (employee: EmployeeWithAdvances) => {
       setEditingEmployee(employee);
       setFormData({
-          employeeId: employee.employeeId,
           name: employee.name,
           phone: employee.phone || "",
           basicSalary: employee.basicSalary.toString()
@@ -105,15 +114,13 @@ export default function EmployeesClient() {
   };
 
   const handleSubmitEmployee = async () => {
-      if (!formData.employeeId || !formData.name || !formData.basicSalary) {
-          toast.error("Please fill required fields");
+      if (!formData.name || !formData.basicSalary) {
+          toast.error("Name and monthly salary are required");
           return;
       }
-
       setSubmitting(true);
       try {
           if (editingEmployee) {
-              // Update
               const res = await updateEmployee(editingEmployee.id, {
                   name: formData.name,
                   phone: formData.phone,
@@ -122,15 +129,13 @@ export default function EmployeesClient() {
               if (res.success) toast.success("Employee updated");
               else toast.error(res.error);
           } else {
-              // Create
               const res = await createEmployee({
-                  employeeId: formData.employeeId,
                   name: formData.name,
                   phone: formData.phone,
                   basicSalary: Number(formData.basicSalary)
               });
-               if (res.success) toast.success("Employee created");
-               else toast.error(res.error);
+              if (res.success) toast.success("Employee created (ID auto-generated)");
+              else toast.error(res.error);
           }
           setEmployeeDialogOpen(false);
           fetchEmployees();
@@ -152,7 +157,6 @@ export default function EmployeesClient() {
 
   const handleSubmitAdvance = async () => {
        if (!selectedEmployee || !advanceAmount) return;
-       
        setAdvanceSubmitting(true);
        try {
            const res = await addSalaryAdvance(selectedEmployee.id, Number(advanceAmount), advanceNote);
@@ -160,14 +164,58 @@ export default function EmployeesClient() {
                toast.success("Salary advance recorded");
                setAdvanceDialogOpen(false);
                fetchEmployees();
-           } else {
-               toast.error(res.error);
-           }
+           } else toast.error(res.error);
        } catch (error) {
            toast.error("Failed to record advance");
        } finally {
            setAdvanceSubmitting(false);
        }
+  };
+
+  const handleOpenSalaryPayment = (employee: EmployeeWithAdvances) => {
+      setSelectedEmployee(employee);
+      const d = new Date();
+      setSalaryForMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+      setSalaryPaymentAmount(employee.basicSalary.toString());
+      setSalaryPaymentNote("");
+      setSalaryPaymentDialogOpen(true);
+  };
+
+  const handleSubmitSalaryPayment = async () => {
+      if (!selectedEmployee || !salaryForMonth || !salaryPaymentAmount) return;
+      setSalaryPaymentSubmitting(true);
+      try {
+          const [y, m] = salaryForMonth.split("-").map(Number);
+          const forMonth = new Date(y, m - 1, 1);
+          const res = await recordSalaryPayment(selectedEmployee.id, Number(salaryPaymentAmount), forMonth, salaryPaymentNote);
+          if (res.success) {
+              toast.success("Salary payment recorded");
+              setSalaryPaymentDialogOpen(false);
+              fetchEmployees();
+          } else toast.error(res.error);
+      } catch (error) {
+          toast.error("Failed to record salary payment");
+      } finally {
+          setSalaryPaymentSubmitting(false);
+      }
+  };
+
+  // Monthly summary: for each month we have basicSalary, sum(salaryPayments), remaining. forMonth can be Date or ISO string.
+  const getMonthKey = (forMonth: string | Date): string => {
+    if (typeof forMonth === "string") return forMonth.slice(0, 7);
+    const d = new Date(forMonth);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  };
+  const getMonthlySummary = (employee: EmployeeWithAdvances) => {
+      const payments = (employee as { salaryPayments?: Array<{ forMonth: string | Date; amount: number }> }).salaryPayments ?? [];
+      const byMonth: Record<string, { salary: number; paid: number }> = {};
+      const monthly = employee.basicSalary;
+      payments.forEach((p: { forMonth: string | Date; amount: number }) => {
+          const key = getMonthKey(p.forMonth);
+          if (!byMonth[key]) byMonth[key] = { salary: monthly, paid: 0 };
+          byMonth[key].paid += p.amount;
+      });
+      return byMonth;
   };
 
   return (
@@ -208,8 +256,8 @@ export default function EmployeesClient() {
                             <TableHead>ID</TableHead>
                             <TableHead>Name</TableHead>
                             <TableHead>Phone</TableHead>
-                            <TableHead>Basic Salary</TableHead>
-                            <TableHead>Recent Advances</TableHead>
+                            <TableHead>Monthly Salary</TableHead>
+                            <TableHead>Paid / Pending</TableHead>
                             <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
                     </TableHeader>
@@ -219,38 +267,47 @@ export default function EmployeesClient() {
                         ) : filteredEmployees.length === 0 ? (
                             <TableRow><TableCell colSpan={6} className="text-center h-24">No employees found.</TableCell></TableRow>
                         ) : (
-                            filteredEmployees.map(employee => (
+                            filteredEmployees.map(employee => {
+                                const salaryPayments = (employee as { salaryPayments?: Array<{ forMonth: string | Date; amount: number }> }).salaryPayments ?? [];
+                                const totalPaid = salaryPayments.reduce((s, p) => s + p.amount, 0);
+                                const byMonth = getMonthlySummary(employee);
+                                const monthsWithPending = Object.entries(byMonth).filter(([, v]) => v.paid < v.salary);
+                                const pendingTotal = monthsWithPending.reduce((s, [, v]) => s + (v.salary - v.paid), 0);
+                                return (
                                 <TableRow key={employee.id}>
                                     <TableCell className="font-mono text-xs">{employee.employeeId}</TableCell>
                                     <TableCell className="font-medium">{employee.name}</TableCell>
                                     <TableCell>{employee.phone || "-"}</TableCell>
                                     <TableCell>Rs. {employee.basicSalary.toLocaleString()}</TableCell>
                                     <TableCell>
-                                        <div className="flex flex-col gap-1">
-                                            {employee.advances && employee.advances.length > 0 ? (
-                                                employee.advances.slice(0, 2).map(adv => (
-                                                    <div key={adv.id} className="text-xs text-muted-foreground">
-                                                        Rs. {adv.amount} ({format(new Date(adv.date), "MMM d")})
-                                                    </div>
-                                                ))
-                                            ) : (
-                                                <span className="text-xs text-muted-foreground">None</span>
-                                            )}
-                                            {(employee._count?.advances || 0) > 2 && (
-                                                <span className="text-xs text-blue-600">+{ (employee._count?.advances || 0) - 2 } more</span>
+                                        <div className="text-sm">
+                                            <span className="text-green-600">Rs. {totalPaid.toLocaleString()} paid</span>
+                                            {pendingTotal > 0 && (
+                                                <span className="text-red-600"> / Rs. {pendingTotal.toLocaleString()} pending</span>
                                             )}
                                         </div>
+                                        {employee.advances?.length ? (
+                                            <div className="text-xs text-muted-foreground mt-0.5">
+                                                Advances: Rs. {employee.advances.reduce((s, a) => s + a.amount, 0).toLocaleString()}
+                                            </div>
+                                        ) : null}
                                     </TableCell>
                                     <TableCell className="text-right space-x-2">
+                                        <Button variant="default" size="sm" onClick={() => handleOpenSalaryPayment(employee)} title="Pay Salary">
+                                            <Banknote className="h-4 w-4 mr-1" /> Pay Salary
+                                        </Button>
                                         <Button variant="outline" size="sm" onClick={() => handleOpenAdvance(employee)} title="Give Advance">
                                             <Wallet className="h-4 w-4 mr-1" /> Advance
+                                        </Button>
+                                        <Button variant="ghost" size="sm" onClick={() => { setSelectedEmployee(employee); setSalaryHistoryOpen(true); }}>
+                                            <Calendar className="h-4 w-4" />
                                         </Button>
                                         <Button variant="ghost" size="sm" onClick={() => handleOpenEdit(employee)}>
                                             <Pencil className="h-4 w-4" />
                                         </Button>
                                     </TableCell>
                                 </TableRow>
-                            ))
+                            );})
                         )}
                     </TableBody>
                 </Table>
@@ -267,41 +324,23 @@ export default function EmployeesClient() {
                     </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 py-4">
-                    <div className="grid grid-cols-2 gap-4">
-                         <div className="space-y-2">
-                            <label className="text-sm font-medium">Employee ID</label>
-                            <Input 
-                                placeholder="E001" 
-                                value={formData.employeeId}
-                                onChange={(e) => setFormData({...formData, employeeId: e.target.value})}
-                                disabled={!!editingEmployee} // ID immutable on edit
-                            />
-                        </div>
+                    {editingEmployee && (
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">Basic Salary</label>
-                             <Input 
-                                type="number"
-                                placeholder="0.00" 
-                                value={formData.basicSalary}
-                                onChange={(e) => setFormData({...formData, basicSalary: e.target.value})}
-                            />
+                            <label className="text-sm font-medium">Employee ID</label>
+                            <Input value={editingEmployee.employeeId} disabled className="bg-muted" />
                         </div>
-                    </div>
+                    )}
                     <div className="space-y-2">
                         <label className="text-sm font-medium">Full Name</label>
-                        <Input 
-                            placeholder="John Doe" 
-                            value={formData.name}
-                            onChange={(e) => setFormData({...formData, name: e.target.value})}
-                        />
+                        <Input placeholder="John Doe" value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} />
                     </div>
-                     <div className="space-y-2">
+                    <div className="space-y-2">
                         <label className="text-sm font-medium">Phone</label>
-                        <Input 
-                            placeholder="077..." 
-                            value={formData.phone}
-                            onChange={(e) => setFormData({...formData, phone: e.target.value})}
-                        />
+                        <Input placeholder="077..." value={formData.phone} onChange={(e) => setFormData({...formData, phone: e.target.value})} />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Monthly Salary (Rs)</label>
+                        <Input type="number" placeholder="0.00" value={formData.basicSalary} onChange={(e) => setFormData({...formData, basicSalary: e.target.value})} />
                     </div>
                 </div>
                 <DialogFooter>
@@ -318,27 +357,16 @@ export default function EmployeesClient() {
              <DialogContent>
                 <DialogHeader>
                     <DialogTitle>Salary Advance</DialogTitle>
-                    <DialogDescription>
-                        Record a cash advance for <b>{selectedEmployee?.name}</b>.
-                    </DialogDescription>
+                    <DialogDescription>Record a cash advance for <b>{selectedEmployee?.name}</b>.</DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 py-4">
                      <div className="space-y-2">
                         <label className="text-sm font-medium">Amount (Rs)</label>
-                         <Input 
-                            type="number"
-                            placeholder="0.00" 
-                            value={advanceAmount}
-                            onChange={(e) => setAdvanceAmount(e.target.value)}
-                        />
+                         <Input type="number" placeholder="0.00" value={advanceAmount} onChange={(e) => setAdvanceAmount(e.target.value)} />
                     </div>
                      <div className="space-y-2">
                         <label className="text-sm font-medium">Note (Optional)</label>
-                         <Input 
-                            placeholder="Reason..." 
-                            value={advanceNote}
-                            onChange={(e) => setAdvanceNote(e.target.value)}
-                        />
+                         <Input placeholder="Reason..." value={advanceNote} onChange={(e) => setAdvanceNote(e.target.value)} />
                     </div>
                 </div>
                 <DialogFooter>
@@ -348,6 +376,79 @@ export default function EmployeesClient() {
                     </Button>
                 </DialogFooter>
              </DialogContent>
+        </Dialog>
+
+        {/* Salary Payment Modal */}
+        <Dialog open={salaryPaymentDialogOpen} onOpenChange={setSalaryPaymentDialogOpen}>
+            <DialogContent>
+                <DialogHeader>
+                    <DialogTitle>Record Salary Payment</DialogTitle>
+                    <DialogDescription>
+                        Record partial or full salary for <b>{selectedEmployee?.name}</b> (Monthly: Rs. {selectedEmployee?.basicSalary.toLocaleString()}).
+                    </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4 py-4">
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">For Month</label>
+                        <Input type="month" value={salaryForMonth} onChange={(e) => setSalaryForMonth(e.target.value)} />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Amount (Rs)</label>
+                        <Input type="number" placeholder="0.00" value={salaryPaymentAmount} onChange={(e) => setSalaryPaymentAmount(e.target.value)} />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Note (Optional)</label>
+                        <Input placeholder="e.g. Full salary, Partial" value={salaryPaymentNote} onChange={(e) => setSalaryPaymentNote(e.target.value)} />
+                    </div>
+                </div>
+                <DialogFooter>
+                    <Button variant="outline" onClick={() => setSalaryPaymentDialogOpen(false)}>Cancel</Button>
+                    <Button onClick={handleSubmitSalaryPayment} disabled={salaryPaymentSubmitting || !salaryForMonth || !Number(salaryPaymentAmount)}>
+                        {salaryPaymentSubmitting ? "Saving..." : "Record Payment"}
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
+
+        {/* Salary History Modal */}
+        <Dialog open={salaryHistoryOpen} onOpenChange={setSalaryHistoryOpen}>
+            <DialogContent className="max-w-lg">
+                <DialogHeader>
+                    <DialogTitle>Monthly Salary History</DialogTitle>
+                    <DialogDescription>{selectedEmployee?.name} — Rs. {selectedEmployee?.basicSalary.toLocaleString()}/month</DialogDescription>
+                </DialogHeader>
+                <div className="py-4">
+                    {selectedEmployee && (() => {
+                        const byMonth = getMonthlySummary(selectedEmployee);
+                        const entries = Object.entries(byMonth).sort(([a], [b]) => b.localeCompare(a));
+                        if (entries.length === 0) {
+                            return <p className="text-sm text-muted-foreground">No salary payments recorded yet.</p>;
+                        }
+                        return (
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead>Month</TableHead>
+                                        <TableHead className="text-right">Salary</TableHead>
+                                        <TableHead className="text-right">Paid</TableHead>
+                                        <TableHead className="text-right">Pending</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {entries.map(([month, v]) => (
+                                        <TableRow key={month}>
+                                            <TableCell>{format(new Date(month + "-01"), "MMM yyyy")}</TableCell>
+                                            <TableCell className="text-right">Rs. {v.salary.toLocaleString()}</TableCell>
+                                            <TableCell className="text-right text-green-600">Rs. {v.paid.toLocaleString()}</TableCell>
+                                            <TableCell className="text-right">{v.paid < v.salary ? <span className="text-red-600">Rs. {(v.salary - v.paid).toLocaleString()}</span> : "—"}</TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        );
+                    })()}
+                </div>
+            </DialogContent>
         </Dialog>
 
        </div>

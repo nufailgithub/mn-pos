@@ -27,13 +27,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Printer, TrendingUp, Package, BarChart3 } from "lucide-react";
-import { reportsApi, type SalesReport, type InventoryReport, type ProductReport } from "@/lib/api/reports";
+import { Printer, TrendingUp, Package, BarChart3, CreditCard, Users } from "lucide-react";
+import { reportsApi, type SalesReport, type InventoryReport, type ProductReport, type BillingReport, type EmployeeReport } from "@/lib/api/reports";
 import { companyDetails } from "@/company/details";
 import { toast } from "sonner";
 import { productsApi } from "@/lib/api/products";
 
-type ReportType = "sales" | "inventory" | "products";
+type ReportType = "sales" | "inventory" | "products" | "billing" | "employees";
 
 export default function ReportsPage() {
   const [reportType, setReportType] = useState<ReportType>("sales");
@@ -55,6 +55,19 @@ export default function ReportsPage() {
   const [productStartDate, setProductStartDate] = useState("");
   const [productEndDate, setProductEndDate] = useState("");
   const [productCategory, setProductCategory] = useState("");
+
+  // Billing report state
+  const [billingReport, setBillingReport] = useState<BillingReport | null>(null);
+  const [billingPeriod, setBillingPeriod] = useState<"today" | "week" | "month" | "year" | "custom">("month");
+  const [billingStartDate, setBillingStartDate] = useState("");
+  const [billingEndDate, setBillingEndDate] = useState("");
+
+  // Employee report state
+  const [employeeReport, setEmployeeReport] = useState<EmployeeReport | null>(null);
+  const [employeeMonth, setEmployeeMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
 
   useEffect(() => {
     fetchCategories();
@@ -83,6 +96,47 @@ export default function ReportsPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reportType, productStartDate, productEndDate, productCategory]);
+
+  const fetchBillingReport = async () => {
+    setLoading(true);
+    try {
+      const params: { period?: string; startDate?: string; endDate?: string } = { period: billingPeriod };
+      if (billingPeriod === "custom") {
+        if (billingStartDate) params.startDate = billingStartDate;
+        if (billingEndDate) params.endDate = billingEndDate;
+      }
+      const report = await reportsApi.getBillingReport(params);
+      setBillingReport(report);
+    } catch (error) {
+      console.error("Failed to fetch billing report", error);
+      toast.error("Failed to load billing report");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchEmployeeReport = async () => {
+    setLoading(true);
+    try {
+      const report = await reportsApi.getEmployeeReport({ month: employeeMonth });
+      setEmployeeReport(report);
+    } catch (error) {
+      console.error("Failed to fetch employee report", error);
+      toast.error("Failed to load employee report");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (reportType === "billing") fetchBillingReport();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportType, billingPeriod, billingStartDate, billingEndDate]);
+
+  useEffect(() => {
+    if (reportType === "employees") fetchEmployeeReport();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportType, employeeMonth]);
 
   const fetchCategories = async () => {
     try {
@@ -162,6 +216,10 @@ export default function ReportsPage() {
       content = generateInventoryReportHTML(inventoryReport, date);
     } else if (type === "products" && productReport) {
       content = generateProductReportHTML(productReport, date);
+    } else if (type === "billing" && billingReport) {
+      content = generateBillingReportHTML(billingReport, date);
+    } else if (type === "employees" && employeeReport) {
+      content = generateEmployeeReportHTML(employeeReport, date);
     } else {
       toast.error("No report data available to print");
       return;
@@ -199,15 +257,33 @@ export default function ReportsPage() {
             <CardDescription>Select the type of report you want to generate</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
               <Button
                 variant={reportType === "sales" ? "default" : "outline"}
                 className="h-auto py-6 flex flex-col gap-2"
                 onClick={() => setReportType("sales")}
               >
                 <TrendingUp className="h-8 w-8" />
-                <span className="font-semibold">Sales Report</span>
+                <span className="font-semibold">Sales</span>
                 <span className="text-xs text-muted-foreground">Revenue & Transactions</span>
+              </Button>
+              <Button
+                variant={reportType === "billing" ? "default" : "outline"}
+                className="h-auto py-6 flex flex-col gap-2"
+                onClick={() => setReportType("billing")}
+              >
+                <CreditCard className="h-8 w-8" />
+                <span className="font-semibold">Billing</span>
+                <span className="text-xs text-muted-foreground">Cash, Bank, Credit, Balances</span>
+              </Button>
+              <Button
+                variant={reportType === "employees" ? "default" : "outline"}
+                className="h-auto py-6 flex flex-col gap-2"
+                onClick={() => setReportType("employees")}
+              >
+                <Users className="h-8 w-8" />
+                <span className="font-semibold">Employees</span>
+                <span className="text-xs text-muted-foreground">Salary Paid vs Pending</span>
               </Button>
               <Button
                 variant={reportType === "inventory" ? "default" : "outline"}
@@ -215,7 +291,7 @@ export default function ReportsPage() {
                 onClick={() => setReportType("inventory")}
               >
                 <Package className="h-8 w-8" />
-                <span className="font-semibold">Inventory Report</span>
+                <span className="font-semibold">Inventory</span>
                 <span className="text-xs text-muted-foreground">Stock & Valuation</span>
               </Button>
               <Button
@@ -224,7 +300,7 @@ export default function ReportsPage() {
                 onClick={() => setReportType("products")}
               >
                 <BarChart3 className="h-8 w-8" />
-                <span className="font-semibold">Product Report</span>
+                <span className="font-semibold">Products</span>
                 <span className="text-xs text-muted-foreground">Performance & Profit</span>
               </Button>
             </div>
@@ -794,6 +870,141 @@ export default function ReportsPage() {
             </CardContent>
           </Card>
         )}
+
+        {/* Billing Report */}
+        {reportType === "billing" && (
+          <Card>
+            <CardHeader>
+              <div className="flex justify-between items-start">
+                <div>
+                  <CardTitle>Billing Report</CardTitle>
+                  <CardDescription>Cash, Bank, Credit sales & customer balances (due & advance)</CardDescription>
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={fetchBillingReport} disabled={loading}>Refresh</Button>
+                  <Button variant="outline" size="sm" onClick={() => handlePrint("billing")} disabled={!billingReport}>
+                    <Printer className="h-4 w-4 mr-2" /> Print
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap gap-4">
+                <Select value={billingPeriod} onValueChange={(v: "today" | "week" | "month" | "year" | "custom") => setBillingPeriod(v)}>
+                  <SelectTrigger className="w-[180px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="today">Today</SelectItem>
+                    <SelectItem value="week">This Week</SelectItem>
+                    <SelectItem value="month">This Month</SelectItem>
+                    <SelectItem value="year">This Year</SelectItem>
+                    <SelectItem value="custom">Custom</SelectItem>
+                  </SelectContent>
+                </Select>
+                {billingPeriod === "custom" && (
+                  <>
+                    <Input type="date" value={billingStartDate} onChange={(e) => setBillingStartDate(e.target.value)} className="w-[180px]" />
+                    <Input type="date" value={billingEndDate} onChange={(e) => setBillingEndDate(e.target.value)} className="w-[180px]" />
+                  </>
+                )}
+              </div>
+              {loading ? (
+                <div className="text-center py-8 text-muted-foreground">Loading...</div>
+              ) : billingReport ? (
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <Card><CardContent className="pt-4"><div className="text-sm text-muted-foreground">Cash Payments</div><div className="text-xl font-bold">{formatCurrency(billingReport.paymentSummary.cashPayments)}</div></CardContent></Card>
+                    <Card><CardContent className="pt-4"><div className="text-sm text-muted-foreground">Bank / UPI Payments</div><div className="text-xl font-bold">{formatCurrency(billingReport.paymentSummary.bankPayments)}</div></CardContent></Card>
+                    <Card><CardContent className="pt-4"><div className="text-sm text-muted-foreground">Credit Sales</div><div className="text-xl font-bold">{formatCurrency(billingReport.paymentSummary.creditSales)}</div></CardContent></Card>
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">Customer Balances</h3>
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                      <Card><CardContent className="pt-4"><div className="text-sm text-muted-foreground">Total Due</div><div className="text-xl font-bold text-red-600">{formatCurrency(billingReport.customerBalances.totalDue)}</div></CardContent></Card>
+                      <Card><CardContent className="pt-4"><div className="text-sm text-muted-foreground">Total Advance</div><div className="text-xl font-bold text-green-600">{formatCurrency(billingReport.customerBalances.totalAdvance)}</div></CardContent></Card>
+                    </div>
+                    <div className="rounded-md border">
+                      <Table>
+                        <TableHeader><TableRow><TableHead>Customer</TableHead><TableHead>Phone</TableHead><TableHead className="text-right">Due</TableHead><TableHead className="text-right">Advance</TableHead></TableRow></TableHeader>
+                        <TableBody>
+                          {billingReport.customerBalances.customers.map((c) => (
+                            <TableRow key={c.id}>
+                              <TableCell className="font-medium">{c.name}</TableCell>
+                              <TableCell>{c.phone}</TableCell>
+                              <TableCell className="text-right text-red-600">{c.due > 0 ? formatCurrency(c.due) : "—"}</TableCell>
+                              <TableCell className="text-right text-green-600">{c.advance > 0 ? formatCurrency(c.advance) : "—"}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-8 text-muted-foreground">No data</div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Employee Report */}
+        {reportType === "employees" && (
+          <Card>
+            <CardHeader>
+              <div className="flex justify-between items-start">
+                <div>
+                  <CardTitle>Employee Salary Report</CardTitle>
+                  <CardDescription>Monthly salary, paid vs pending</CardDescription>
+                </div>
+                <div className="flex gap-2">
+                  <Input type="month" value={employeeMonth} onChange={(e) => setEmployeeMonth(e.target.value)} className="w-[160px]" />
+                  <Button variant="outline" size="sm" onClick={fetchEmployeeReport} disabled={loading}>Refresh</Button>
+                  <Button variant="outline" size="sm" onClick={() => handlePrint("employees")} disabled={!employeeReport}>
+                    <Printer className="h-4 w-4 mr-2" /> Print
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="text-center py-8 text-muted-foreground">Loading...</div>
+              ) : employeeReport ? (
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <Card><CardContent className="pt-4"><div className="text-sm text-muted-foreground">Total Salary ({employeeReport.monthLabel})</div><div className="text-xl font-bold">{formatCurrency(employeeReport.summary.totalSalary)}</div></CardContent></Card>
+                    <Card><CardContent className="pt-4"><div className="text-sm text-muted-foreground">Total Paid</div><div className="text-xl font-bold text-green-600">{formatCurrency(employeeReport.summary.totalPaid)}</div></CardContent></Card>
+                    <Card><CardContent className="pt-4"><div className="text-sm text-muted-foreground">Total Pending</div><div className="text-xl font-bold text-red-600">{formatCurrency(employeeReport.summary.totalPending)}</div></CardContent></Card>
+                  </div>
+                  <div className="rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>ID</TableHead>
+                          <TableHead>Name</TableHead>
+                          <TableHead className="text-right">Monthly Salary</TableHead>
+                          <TableHead className="text-right">Paid</TableHead>
+                          <TableHead className="text-right">Pending</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {employeeReport.employees.map((emp) => (
+                          <TableRow key={emp.id}>
+                            <TableCell className="font-mono text-xs">{emp.employeeId}</TableCell>
+                            <TableCell className="font-medium">{emp.name}</TableCell>
+                            <TableCell className="text-right">{formatCurrency(emp.monthlySalary)}</TableCell>
+                            <TableCell className="text-right text-green-600">{formatCurrency(emp.paid)}</TableCell>
+                            <TableCell className="text-right text-red-600">{formatCurrency(emp.pending)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-8 text-muted-foreground">No data</div>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </div>
     </MainLayout>
   );
@@ -1006,4 +1217,39 @@ function generateProductReportHTML(report: ProductReport, date: string): string 
     <div class="footer">Generated by ${companyDetails.name} POS System</div>
   </body>
 </html>`;
+}
+
+function generateBillingReportHTML(report: BillingReport, date: string): string {
+  const ps = report.paymentSummary;
+  const cb = report.customerBalances;
+  return `<!DOCTYPE html>
+<html><head><title>Billing Report - ${companyDetails.name}</title>
+<style>@media print { @page { margin: 10mm; } } body { font-family: Arial, sans-serif; padding: 20px; }
+.header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 20px; }
+table { width: 100%; border-collapse: collapse; margin: 10px 0; } th, td { border: 1px solid #ddd; padding: 8px; text-align: left; } th { background: #f5f5f5; }
+.footer { text-align: center; margin-top: 20px; font-size: 11px; color: #666; }</style></head>
+<body>
+<div class="header"><h1>Billing Report</h1><p>${companyDetails.name}</p><p>Period: ${new Date(report.dateRange.start).toLocaleDateString()} - ${new Date(report.dateRange.end).toLocaleDateString()}</p><p>Generated: ${date}</p></div>
+<h2>Payment Summary</h2><p>Cash: Rs. ${ps.cashPayments.toLocaleString()} | Bank/UPI: Rs. ${ps.bankPayments.toLocaleString()} | Credit Sales: Rs. ${ps.creditSales.toLocaleString()}</p>
+<h2>Customer Balances</h2><p>Total Due: Rs. ${cb.totalDue.toLocaleString()} | Total Advance: Rs. ${cb.totalAdvance.toLocaleString()}</p>
+<table><thead><tr><th>Customer</th><th>Phone</th><th>Due</th><th>Advance</th></tr></thead><tbody>
+${cb.customers.map(c => `<tr><td>${c.name}</td><td>${c.phone}</td><td>Rs. ${c.due.toLocaleString()}</td><td>Rs. ${c.advance.toLocaleString()}</td></tr>`).join("")}
+</tbody></table>
+<div class="footer">Generated by ${companyDetails.name} POS System</div></body></html>`;
+}
+
+function generateEmployeeReportHTML(report: EmployeeReport, date: string): string {
+  return `<!DOCTYPE html>
+<html><head><title>Employee Salary Report - ${companyDetails.name}</title>
+<style>@media print { @page { margin: 10mm; } } body { font-family: Arial, sans-serif; padding: 20px; }
+.header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 20px; }
+table { width: 100%; border-collapse: collapse; } th, td { border: 1px solid #ddd; padding: 8px; } th { background: #f5f5f5; }
+.footer { text-align: center; margin-top: 20px; font-size: 11px; color: #666; }</style></head>
+<body>
+<div class="header"><h1>Employee Salary Report</h1><p>${companyDetails.name}</p><p>Month: ${report.monthLabel}</p><p>Generated: ${date}</p></div>
+<p>Total Salary: Rs. ${report.summary.totalSalary.toLocaleString()} | Paid: Rs. ${report.summary.totalPaid.toLocaleString()} | Pending: Rs. ${report.summary.totalPending.toLocaleString()}</p>
+<table><thead><tr><th>ID</th><th>Name</th><th>Monthly Salary</th><th>Paid</th><th>Pending</th></tr></thead><tbody>
+${report.employees.map(e => `<tr><td>${e.employeeId}</td><td>${e.name}</td><td>Rs. ${e.monthlySalary.toLocaleString()}</td><td>Rs. ${e.paid.toLocaleString()}</td><td>Rs. ${e.pending.toLocaleString()}</td></tr>`).join("")}
+</tbody></table>
+<div class="footer">Generated by ${companyDetails.name} POS System</div></body></html>`;
 }

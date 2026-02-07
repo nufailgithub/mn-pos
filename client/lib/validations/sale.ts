@@ -13,7 +13,7 @@ export const createSaleSchema = z.object({
   items: z.array(saleItemSchema).min(1, "At least one item is required"),
   payments: z.array(z.object({
     amount: z.number().positive(),
-    method: z.enum(["CASH", "CARD", "MOBILE", "BANK_TRANSFER", "CREDIT", "LOAN"]),
+    method: z.enum(["CASH", "CARD", "MOBILE", "BANK_TRANSFER", "CREDIT"]),
     reference: z.string().optional()
   })).default([]),
   customerId: z.string().optional(),

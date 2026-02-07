@@ -3,41 +3,46 @@
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 
-// Using explicit types because imports from @prisma/client might be tricky with generation issues
-// But let's try importing them if generation succeeded.
-import { Employee, SalaryAdvance, EmployeeStatus, Prisma } from "@prisma/client";
+import { Employee, SalaryAdvance, SalaryPayment, EmployeeStatus } from "@prisma/client";
+import { startOfMonth } from "date-fns";
 
 export type EmployeeWithAdvances = Employee & {
   advances: SalaryAdvance[];
-  _count?: { advances: number };
+  salaryPayments?: SalaryPayment[];
+  _count?: { advances: number; salaryPayments: number };
 };
 
-// Create a new employee
+// Generate next employee ID (EMP-001, EMP-002, ...)
+async function generateEmployeeId(): Promise<string> {
+  const list = await prisma.employee.findMany({
+    select: { employeeId: true },
+    orderBy: { createdAt: "desc" },
+  });
+  let maxNum = 0;
+  for (const e of list) {
+    const m = /^EMP-(\d+)$/i.exec(e.employeeId);
+    if (m) maxNum = Math.max(maxNum, Number.parseInt(m[1], 10));
+  }
+  return `EMP-${String(maxNum + 1).padStart(3, "0")}`;
+}
+
+// Create a new employee (employeeId is auto-generated; do not pass)
 export async function createEmployee(data: {
-  employeeId: string;
   name: string;
   phone?: string;
   basicSalary: number;
 }) {
   try {
-    const existing = await prisma.employee.findUnique({
-      where: { employeeId: data.employeeId },
-    });
-
-    if (existing) {
-      return { success: false, error: "Employee ID already exists" };
-    }
-
+    const employeeId = await generateEmployeeId();
     const employee = await prisma.employee.create({
       data: {
-        employeeId: data.employeeId,
+        employeeId,
         name: data.name,
         phone: data.phone,
         basicSalary: data.basicSalary,
         status: "ACTIVE",
       },
     });
-
     revalidatePath("/dashboard/employees");
     return { success: true, data: employee };
   } catch (error) {
@@ -67,10 +72,10 @@ export async function updateEmployee(id: string, data: {
   }
 }
 
-// Get all employees
+// Get all employees with advances and salary payments (for monthly history)
 export async function getEmployees(activeOnly: boolean = false) {
   try {
-    const where: any = {};
+    const where: Record<string, unknown> = {};
     if (activeOnly) {
       where.status = "ACTIVE";
     }
@@ -79,13 +84,9 @@ export async function getEmployees(activeOnly: boolean = false) {
       where,
       orderBy: { name: "asc" },
       include: {
-        advances: {
-            orderBy: { date: "desc" },
-            take: 5 // Get recent advances
-        },
-        _count: {
-          select: { advances: true },
-        },
+        advances: { orderBy: { date: "desc" }, take: 10 },
+        salaryPayments: { orderBy: { forMonth: "desc" }, take: 24 },
+        _count: { select: { advances: true, salaryPayments: true } },
       },
     });
 
@@ -100,27 +101,42 @@ export async function getEmployees(activeOnly: boolean = false) {
 export async function addSalaryAdvance(employeeId: string, amount: number, note?: string) {
   try {
     if (amount <= 0) {
-        return { success: false, error: "Amount must be positive" };
+      return { success: false, error: "Amount must be positive" };
     }
-
-    const advance = await prisma.salaryAdvance.create({
-      data: {
-        employeeId,
-        amount,
-        note,
-        date: new Date(),
-      },
+    await prisma.salaryAdvance.create({
+      data: { employeeId, amount, note, date: new Date() },
     });
-
     revalidatePath("/dashboard/employees");
-    return { success: true, data: advance };
+    return { success: true };
   } catch (error) {
     console.error("Error adding salary advance:", error);
     return { success: false, error: "Failed to add salary advance" };
   }
 }
 
-// Delete/Archive Employee (Soft delete by setting status to INACTIVE usually preferred, but here simple status toggle)
+// Record salary payment (partial or full) for a given month
+export async function recordSalaryPayment(
+  employeeId: string,
+  amount: number,
+  forMonth: Date,
+  note?: string
+) {
+  try {
+    if (amount <= 0) {
+      return { success: false, error: "Amount must be positive" };
+    }
+    const monthStart = startOfMonth(new Date(forMonth));
+    await prisma.salaryPayment.create({
+      data: { employeeId, amount, forMonth: monthStart, note },
+    });
+    revalidatePath("/dashboard/employees");
+    return { success: true };
+  } catch (error) {
+    console.error("Error recording salary payment:", error);
+    return { success: false, error: "Failed to record salary payment" };
+  }
+}
+
 export async function toggleEmployeeStatus(id: string, newStatus: EmployeeStatus) {
-    return updateEmployee(id, { status: newStatus });
+  return updateEmployee(id, { status: newStatus });
 }

@@ -2,7 +2,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
-import { Prisma, Customer, CustomerTransaction, Sale } from "@prisma/client";
+import { Customer, CustomerTransaction, Sale } from "@prisma/client";
 
 export type CustomerStatus = "ACTIVE" | "INACTIVE"; // Logic-level status
 
@@ -75,7 +75,7 @@ export async function getCustomers(hasDebtOnly: boolean = false) {
   }
 }
 
-// Get customer details including transaction history
+// Get customer details including transaction history and sales with payments + sale items (full bill details for credit)
 export async function getCustomerById(id: string) {
   try {
     const customer = await prisma.customer.findUnique({
@@ -83,11 +83,21 @@ export async function getCustomerById(id: string) {
       include: {
         transactions: {
           orderBy: { date: "desc" },
-          take: 20,
+          take: 100,
         },
         sales: {
           orderBy: { createdAt: "desc" },
-          take: 5,
+          take: 100,
+          include: {
+            payments: true,
+            saleItems: {
+              include: {
+                product: {
+                  select: { id: true, name: true, sku: true },
+                },
+              },
+            },
+          },
         },
       },
     });
@@ -122,18 +132,18 @@ export async function addCustomerPayment(
       return { success: false, error: "Customer not found" };
     }
 
-    if (customer.totalDebt < amount) {
-        // Optional: Allow overpayment? For now, restrict.
-        // Or specific logic. Let's strictly block paying more than debt for simplicity or warn.
-        // Logic: just update.
-    }
+    // If paying more than debt, excess goes to reducing advance (we owe them less). Cap advance reduction so it doesn't go negative.
+    const debtReduction = Math.min(amount, customer.totalDebt);
+    const excess = Math.max(0, amount - debtReduction);
+    const advanceBalance = (customer as { totalAdvance?: number }).totalAdvance ?? 0;
+    const advanceReduction = Math.min(excess, advanceBalance);
 
-    // Transaction to update debt and log transaction
     await prisma.$transaction([
       prisma.customer.update({
         where: { id: customerId },
         data: {
-          totalDebt: { decrement: amount },
+          ...(debtReduction > 0 && { totalDebt: { decrement: debtReduction } }),
+          ...(advanceReduction > 0 && { totalAdvance: { decrement: advanceReduction } }),
         },
       }),
       prisma.customerTransaction.create({
