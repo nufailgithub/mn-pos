@@ -480,7 +480,7 @@ export default function NewBillPage() {
                             <div className="text-sm text-muted-foreground">{product.productId} • Rs. {product.sellingPrice.toLocaleString()}</div>
                           </div>
                             <div className="text-right">
-                              <div className={`text-sm font-medium ${(product.totalQuantity || 0) <= product.stockAlertLimit ? "text-red-600" : "text-green-600"}`}>
+                              <div className={`text-sm  font-medium ${(product.totalQuantity || 0) <= product.stockAlertLimit ? "text-red-600" : "text-green-600"}`}>
                                 Stock: {product.totalQuantity || 0}
                               </div>
                             </div>
