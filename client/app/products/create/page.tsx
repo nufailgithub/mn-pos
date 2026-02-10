@@ -471,6 +471,7 @@ export default function CreateProductPage() {
             productName={createdProduct.name}
             open={barcodeDialogOpen}
             onOpenChange={setBarcodeDialogOpen}
+            defaultQuantity={(createdProduct as { totalQuantity?: number }).totalQuantity && (createdProduct as { totalQuantity?: number }).totalQuantity! > 0 ? (createdProduct as { totalQuantity?: number }).totalQuantity! : 1}
           />
         )}
       </div>

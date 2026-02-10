@@ -12,7 +12,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { ArrowLeft, Edit2, Trash2 } from "lucide-react";
+import { ArrowLeft, Edit2, Trash2, Barcode } from "lucide-react";
+import { BarcodeDisplay } from "@/components/barcode/BarcodeDisplay";
 import { productsApi, type Product } from "@/lib/api/products";
 import { toast } from "sonner";
 import {
@@ -31,6 +32,7 @@ export default function ViewProductPage() {
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [barcodeDialogOpen, setBarcodeDialogOpen] = useState(false);
 
   useEffect(() => {
     fetchProduct();
@@ -111,6 +113,12 @@ export default function ViewProductPage() {
             </div>
           </div>
           <div className="flex gap-2">
+            {product.barcode && (
+              <Button variant="outline" className="gap-2" onClick={() => setBarcodeDialogOpen(true)}>
+                <Barcode className="h-4 w-4" />
+                Print barcodes
+              </Button>
+            )}
             <Link href={`/products/${productId}/edit`}>
               <Button variant="outline" className="gap-2">
                 <Edit2 className="h-4 w-4" />
@@ -276,6 +284,17 @@ export default function ViewProductPage() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Barcode print dialog */}
+        {product.barcode && (
+          <BarcodeDisplay
+            barcode={product.barcode}
+            productName={product.name}
+            open={barcodeDialogOpen}
+            onOpenChange={setBarcodeDialogOpen}
+            defaultQuantity={product.totalQuantity && product.totalQuantity > 0 ? product.totalQuantity : 1}
+          />
+        )}
 
         {/* Delete Confirmation Dialog */}
         <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

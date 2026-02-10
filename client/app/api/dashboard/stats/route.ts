@@ -1,6 +1,15 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { startOfDay, endOfDay } from "date-fns";
+import { startOfDay, endOfDay, subDays, format } from "date-fns";
+
+const PAYMENT_METHOD_LABEL: Record<string, string> = {
+  CASH: "Cash",
+  BANK_TRANSFER: "Bank / UPI",
+  CARD: "Card",
+  MOBILE: "Mobile",
+  CREDIT: "Credit",
+  LOAN: "Loan",
+};
 
 // GET /api/dashboard/stats - Get dashboard statistics
 export async function GET() {
@@ -21,6 +30,18 @@ export async function GET() {
       _sum: {
         total: true,
       },
+      _count: true,
+    });
+
+    // Yesterday for comparison
+    const yesterdayStart = startOfDay(subDays(today, 1));
+    const yesterdayEnd = endOfDay(subDays(today, 1));
+    const yesterdaySales = await prisma.sale.aggregate({
+      where: {
+        createdAt: { gte: yesterdayStart, lte: yesterdayEnd },
+        status: "COMPLETED",
+      },
+      _sum: { total: true },
       _count: true,
     });
 
@@ -55,37 +76,77 @@ export async function GET() {
 
     const lowStockProducts = lowStockProductIds.size;
 
-    // Recent sales
+    // Revenue by day (last 7 days) for chart
+    const last7Days = Array.from({ length: 7 }, (_, i) => subDays(today, 6 - i));
+    const revenueByDay = await Promise.all(
+      last7Days.map(async (day) => {
+        const start = startOfDay(day);
+        const end = endOfDay(day);
+        const agg = await prisma.sale.aggregate({
+          where: {
+            createdAt: { gte: start, lte: end },
+            status: "COMPLETED",
+          },
+          _sum: { total: true },
+          _count: true,
+        });
+        return {
+          date: format(day, "MMM d"),
+          fullDate: format(day, "yyyy-MM-dd"),
+          revenue: agg._sum.total ?? 0,
+          count: agg._count,
+        };
+      })
+    );
+
+    // Payment method breakdown (last 7 days) for chart
+    const sevenDaysAgo = startOfDay(subDays(today, 6));
+    const salesWithPayments = await prisma.sale.findMany({
+      where: {
+        createdAt: { gte: sevenDaysAgo },
+        status: "COMPLETED",
+      },
+      include: { payments: true },
+    });
+    const paymentMethodBreakdown: Record<string, number> = {};
+    salesWithPayments.forEach((sale) => {
+      sale.payments.forEach((p) => {
+        const label = PAYMENT_METHOD_LABEL[p.method] ?? p.method;
+        paymentMethodBreakdown[label] = (paymentMethodBreakdown[label] ?? 0) + p.amount;
+      });
+    });
+    const paymentMethodChart = Object.entries(paymentMethodBreakdown).map(([name, value]) => ({
+      name,
+      value: Math.round(value * 100) / 100,
+    }));
+
+    // Recent sales with payments
     const recentSales = await prisma.sale.findMany({
       take: 10,
-      orderBy: {
-        createdAt: "desc",
-      },
+      orderBy: { createdAt: "desc" },
+      where: { status: "COMPLETED" },
       include: {
-        cashier: {
-          select: {
-            name: true,
-          },
-        },
+        cashier: { select: { name: true } },
         saleItems: {
-          include: {
-            product: {
-              select: {
-                name: true,
-              },
-            },
-          },
+          include: { product: { select: { name: true } } },
         },
+        payments: true,
       },
     });
 
     return NextResponse.json({
       todaySales: {
-        total: todaySales._sum.total || 0,
+        total: todaySales._sum.total ?? 0,
         count: todaySales._count,
+      },
+      yesterdaySales: {
+        total: yesterdaySales._sum.total ?? 0,
+        count: yesterdaySales._count,
       },
       totalProducts,
       lowStockProducts,
+      revenueByDay,
+      paymentMethodChart,
       recentSales,
     });
   } catch (error) {
