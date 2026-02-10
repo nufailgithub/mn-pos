@@ -27,7 +27,9 @@ export async function GET(request: NextRequest) {
     const rows = employees.map((emp) => {
       const monthlySalary = emp.basicSalary;
       const paidThisMonth = emp.salaryPayments.reduce((s, p) => s + p.amount, 0);
-      const pending = Math.max(0, monthlySalary - paidThisMonth);
+      const totalAdvances = emp.advances.reduce((s, a) => s + a.amount, 0);
+      const remainingBeforeAdvance = Math.max(0, monthlySalary - paidThisMonth);
+      const pending = Math.max(0, remainingBeforeAdvance - totalAdvances);
       return {
         id: emp.id,
         employeeId: emp.employeeId,
@@ -35,6 +37,7 @@ export async function GET(request: NextRequest) {
         monthlySalary,
         paid: paidThisMonth,
         pending,
+        totalAdvances,
         salaryPayments: emp.salaryPayments,
       };
     });

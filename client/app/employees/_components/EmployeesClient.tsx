@@ -175,8 +175,10 @@ export default function EmployeesClient() {
   const handleOpenSalaryPayment = (employee: EmployeeWithAdvances) => {
       setSelectedEmployee(employee);
       const d = new Date();
-      setSalaryForMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
-      setSalaryPaymentAmount(employee.basicSalary.toString());
+      const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      setSalaryForMonth(monthKey);
+      const remaining = getRemainingToPayForMonth(employee, monthKey);
+      setSalaryPaymentAmount(remaining > 0 ? remaining.toString() : "0");
       setSalaryPaymentNote("");
       setSalaryPaymentDialogOpen(true);
   };
@@ -200,12 +202,14 @@ export default function EmployeesClient() {
       }
   };
 
-  // Monthly summary: for each month we have basicSalary, sum(salaryPayments), remaining. forMonth can be Date or ISO string.
+  // Month key from forMonth (Date or string)
   const getMonthKey = (forMonth: string | Date): string => {
     if (typeof forMonth === "string") return forMonth.slice(0, 7);
     const d = new Date(forMonth);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   };
+
+  // Per-month: salary and paid (salary payments only)
   const getMonthlySummary = (employee: EmployeeWithAdvances) => {
       const payments = (employee as { salaryPayments?: Array<{ forMonth: string | Date; amount: number }> }).salaryPayments ?? [];
       const byMonth: Record<string, { salary: number; paid: number }> = {};
@@ -218,6 +222,33 @@ export default function EmployeesClient() {
       return byMonth;
   };
 
+  // Algorithm: Salary = Advance + Remaining to pay. Allocate advances to oldest months first; return per-month advanceUsed and remainingToPay.
+  const getMonthlySummaryWithAdvance = (employee: EmployeeWithAdvances) => {
+      const byMonth = getMonthlySummary(employee);
+      const totalAdvances = employee.advances?.reduce((s, a) => s + a.amount, 0) ?? 0;
+      const monthsSorted = Object.entries(byMonth).sort(([a], [b]) => a.localeCompare(b));
+      let advanceLeft = totalAdvances;
+      const result: Record<string, { salary: number; paid: number; advanceUsed: number; remainingToPay: number }> = {};
+      for (const [month, v] of monthsSorted) {
+          const remainingBefore = Math.max(0, v.salary - v.paid);
+          const advanceUsed = Math.min(advanceLeft, remainingBefore);
+          advanceLeft -= advanceUsed;
+          result[month] = {
+              salary: v.salary,
+              paid: v.paid,
+              advanceUsed,
+              remainingToPay: Math.max(0, remainingBefore - advanceUsed),
+          };
+      }
+      return { byMonth: result, totalAdvances };
+  };
+
+  // Remaining to pay for a specific month (after advance): used to pre-fill Pay Salary
+  const getRemainingToPayForMonth = (employee: EmployeeWithAdvances, monthKey: string): number => {
+      const { byMonth } = getMonthlySummaryWithAdvance(employee);
+      return byMonth[monthKey]?.remainingToPay ?? Math.max(0, employee.basicSalary - 0);
+  };
+
   return (
     <MainLayout>
        <div className="space-y-6">
@@ -225,7 +256,7 @@ export default function EmployeesClient() {
             <div>
                 <h1 className="text-3xl font-bold tracking-tight">Employee Management</h1>
                 <p className="text-muted-foreground mt-2">
-                    Manage staff details, basic salaries, and salary advances.
+                    Monthly salary = Advance (given earlier) + Remaining to pay. Pay only the remaining amount at month end.
                 </p>
             </div>
             <Button onClick={handleOpenCreate} className="gap-2">
@@ -257,7 +288,7 @@ export default function EmployeesClient() {
                             <TableHead>Name</TableHead>
                             <TableHead>Phone</TableHead>
                             <TableHead>Monthly Salary</TableHead>
-                            <TableHead>Paid / Pending</TableHead>
+                            <TableHead>Remaining to pay (Salary − Advance)</TableHead>
                             <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
                     </TableHeader>
@@ -268,11 +299,10 @@ export default function EmployeesClient() {
                             <TableRow><TableCell colSpan={6} className="text-center h-24">No employees found.</TableCell></TableRow>
                         ) : (
                             filteredEmployees.map(employee => {
-                                const salaryPayments = (employee as { salaryPayments?: Array<{ forMonth: string | Date; amount: number }> }).salaryPayments ?? [];
-                                const totalPaid = salaryPayments.reduce((s, p) => s + p.amount, 0);
                                 const byMonth = getMonthlySummary(employee);
-                                const monthsWithPending = Object.entries(byMonth).filter(([, v]) => v.paid < v.salary);
-                                const pendingTotal = monthsWithPending.reduce((s, [, v]) => s + (v.salary - v.paid), 0);
+                                const totalRemainingBeforeAdvance = Object.values(byMonth).reduce((s, v) => s + Math.max(0, v.salary - v.paid), 0);
+                                const totalAdvances = employee.advances?.reduce((s, a) => s + a.amount, 0) ?? 0;
+                                const pendingTotal = Math.max(0, totalRemainingBeforeAdvance - totalAdvances);
                                 return (
                                 <TableRow key={employee.id}>
                                     <TableCell className="font-mono text-xs">{employee.employeeId}</TableCell>
@@ -281,16 +311,16 @@ export default function EmployeesClient() {
                                     <TableCell>Rs. {employee.basicSalary.toLocaleString()}</TableCell>
                                     <TableCell>
                                         <div className="text-sm">
-                                            <span className="text-green-600">Rs. {totalPaid.toLocaleString()} paid</span>
-                                            {pendingTotal > 0 && (
-                                                <span className="text-red-600"> / Rs. {pendingTotal.toLocaleString()} pending</span>
+                                            <span className="text-muted-foreground">Salary Rs. {employee.basicSalary.toLocaleString()}</span>
+                                            {totalAdvances > 0 && (
+                                                <span className="text-muted-foreground"> − Advance Rs. {totalAdvances.toLocaleString()}</span>
+                                            )}
+                                            {pendingTotal > 0 ? (
+                                                <span className="text-red-600 font-medium"> = Rs. {pendingTotal.toLocaleString()} to pay</span>
+                                            ) : (
+                                                <span className="text-green-600 font-medium"> = Rs. 0 to pay</span>
                                             )}
                                         </div>
-                                        {employee.advances?.length ? (
-                                            <div className="text-xs text-muted-foreground mt-0.5">
-                                                Advances: Rs. {employee.advances.reduce((s, a) => s + a.amount, 0).toLocaleString()}
-                                            </div>
-                                        ) : null}
                                     </TableCell>
                                     <TableCell className="text-right space-x-2">
                                         <Button variant="default" size="sm" onClick={() => handleOpenSalaryPayment(employee)} title="Pay Salary">
@@ -352,12 +382,14 @@ export default function EmployeesClient() {
             </DialogContent>
         </Dialog>
 
-        {/* Advance Modal */}
+        {/* Advance Modal — Advance is given FROM their monthly salary; remaining to pay = Salary − Advance */}
         <Dialog open={advanceDialogOpen} onOpenChange={setAdvanceDialogOpen}>
              <DialogContent>
                 <DialogHeader>
-                    <DialogTitle>Salary Advance</DialogTitle>
-                    <DialogDescription>Record a cash advance for <b>{selectedEmployee?.name}</b>.</DialogDescription>
+                    <DialogTitle>Give Advance</DialogTitle>
+                    <DialogDescription>
+                        Advance is given from the employee&apos;s monthly salary. At month end you pay only the remainder: <strong>Salary − Advance = Amount to pay</strong>.
+                    </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 py-4">
                      <div className="space-y-2">
@@ -378,22 +410,37 @@ export default function EmployeesClient() {
              </DialogContent>
         </Dialog>
 
-        {/* Salary Payment Modal */}
+        {/* Salary Payment Modal — Salary = Advance + Remaining to pay */}
         <Dialog open={salaryPaymentDialogOpen} onOpenChange={setSalaryPaymentDialogOpen}>
             <DialogContent>
                 <DialogHeader>
-                    <DialogTitle>Record Salary Payment</DialogTitle>
+                    <DialogTitle>Pay Salary</DialogTitle>
                     <DialogDescription>
-                        Record partial or full salary for <b>{selectedEmployee?.name}</b> (Monthly: Rs. {selectedEmployee?.basicSalary.toLocaleString()}).
+                        Monthly salary = Advance (already given) + Remaining to pay. Enter the amount you are paying now.
                     </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 py-4">
+                    {selectedEmployee && (
+                        <div className="rounded-lg border bg-muted/40 p-3 text-sm space-y-1">
+                            <div className="flex justify-between"><span className="text-muted-foreground">Monthly salary</span><span className="font-semibold">Rs. {selectedEmployee.basicSalary.toLocaleString()}</span></div>
+                            <div className="flex justify-between"><span className="text-muted-foreground">Advance (already given)</span><span>Rs. {(selectedEmployee.advances?.reduce((s, a) => s + a.amount, 0) ?? 0).toLocaleString()}</span></div>
+                            <div className="flex justify-between pt-1 border-t"><span className="text-muted-foreground">Remaining to pay for selected month</span><span className="font-semibold text-primary">Rs. {getRemainingToPayForMonth(selectedEmployee, salaryForMonth).toLocaleString()}</span></div>
+                        </div>
+                    )}
                     <div className="space-y-2">
                         <label className="text-sm font-medium">For Month</label>
-                        <Input type="month" value={salaryForMonth} onChange={(e) => setSalaryForMonth(e.target.value)} />
+                        <Input
+                            type="month"
+                            value={salaryForMonth}
+                            onChange={(e) => {
+                                const m = e.target.value;
+                                setSalaryForMonth(m);
+                                if (selectedEmployee) setSalaryPaymentAmount(getRemainingToPayForMonth(selectedEmployee, m).toString());
+                            }}
+                        />
                     </div>
                     <div className="space-y-2">
-                        <label className="text-sm font-medium">Amount (Rs)</label>
+                        <label className="text-sm font-medium">Amount paying now (Rs)</label>
                         <Input type="number" placeholder="0.00" value={salaryPaymentAmount} onChange={(e) => setSalaryPaymentAmount(e.target.value)} />
                     </div>
                     <div className="space-y-2">
@@ -410,41 +457,56 @@ export default function EmployeesClient() {
             </DialogContent>
         </Dialog>
 
-        {/* Salary History Modal */}
+        {/* Salary History Modal — Salary = Advance + Paid; Remaining to pay = Salary − Advance − Paid */}
         <Dialog open={salaryHistoryOpen} onOpenChange={setSalaryHistoryOpen}>
-            <DialogContent className="max-w-lg">
+            <DialogContent className="max-w-2xl">
                 <DialogHeader>
                     <DialogTitle>Monthly Salary History</DialogTitle>
-                    <DialogDescription>{selectedEmployee?.name} — Rs. {selectedEmployee?.basicSalary.toLocaleString()}/month</DialogDescription>
+                    <DialogDescription>
+                        <strong>Salary = Advance + Amount paid.</strong> For each month: remaining to pay = Salary − Advance used − Paid.
+                    </DialogDescription>
                 </DialogHeader>
                 <div className="py-4">
                     {selectedEmployee && (() => {
-                        const byMonth = getMonthlySummary(selectedEmployee);
+                        const { byMonth, totalAdvances } = getMonthlySummaryWithAdvance(selectedEmployee);
                         const entries = Object.entries(byMonth).sort(([a], [b]) => b.localeCompare(a));
                         if (entries.length === 0) {
-                            return <p className="text-sm text-muted-foreground">No salary payments recorded yet.</p>;
+                            return (
+                                <p className="text-sm text-muted-foreground">
+                                    No salary payments recorded yet. Total advance given: Rs. {totalAdvances.toLocaleString()}.
+                                </p>
+                            );
                         }
                         return (
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Month</TableHead>
-                                        <TableHead className="text-right">Salary</TableHead>
-                                        <TableHead className="text-right">Paid</TableHead>
-                                        <TableHead className="text-right">Pending</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {entries.map(([month, v]) => (
-                                        <TableRow key={month}>
-                                            <TableCell>{format(new Date(month + "-01"), "MMM yyyy")}</TableCell>
-                                            <TableCell className="text-right">Rs. {v.salary.toLocaleString()}</TableCell>
-                                            <TableCell className="text-right text-green-600">Rs. {v.paid.toLocaleString()}</TableCell>
-                                            <TableCell className="text-right">{v.paid < v.salary ? <span className="text-red-600">Rs. {(v.salary - v.paid).toLocaleString()}</span> : "—"}</TableCell>
+                            <>
+                                {totalAdvances > 0 && (
+                                    <p className="text-sm text-muted-foreground mb-3">
+                                        Total advance (allocated to oldest months first): <strong>Rs. {totalAdvances.toLocaleString()}</strong>
+                                    </p>
+                                )}
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Month</TableHead>
+                                            <TableHead className="text-right">Salary</TableHead>
+                                            <TableHead className="text-right">Advance used</TableHead>
+                                            <TableHead className="text-right">Paid</TableHead>
+                                            <TableHead className="text-right">Remaining to pay</TableHead>
                                         </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {entries.map(([month, v]) => (
+                                            <TableRow key={month}>
+                                                <TableCell>{format(new Date(month + "-01"), "MMM yyyy")}</TableCell>
+                                                <TableCell className="text-right">Rs. {v.salary.toLocaleString()}</TableCell>
+                                                <TableCell className="text-right text-muted-foreground">{v.advanceUsed > 0 ? `Rs. ${v.advanceUsed.toLocaleString()}` : "—"}</TableCell>
+                                                <TableCell className="text-right text-green-600">Rs. {v.paid.toLocaleString()}</TableCell>
+                                                <TableCell className="text-right">{v.remainingToPay > 0 ? <span className="text-red-600 font-medium">Rs. {v.remainingToPay.toLocaleString()}</span> : <span className="text-green-600">—</span>}</TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </>
                         );
                     })()}
                 </div>

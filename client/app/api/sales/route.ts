@@ -160,7 +160,16 @@ export async function POST(request: NextRequest) {
     const creditAmount = paymentsList.reduce((sum, p) => (p.method === "CREDIT" ? sum + p.amount : sum), 0);
     const totalPaid = totalPaidCashBank + creditAmount;
     const balanceAmount = Math.max(0, total - totalPaid);
-    const overpaymentAmount = Math.max(0, totalPaid - total); // Change → customer advance
+    const overpaymentAmount = Math.max(0, totalPaid - total);
+
+    // When overpayment: we give change; revenue = total. Store only payments that sum to total (so cash saved = 4500 not 5000).
+    const paymentsToStore =
+      totalPaid > total && totalPaid > 0
+        ? paymentsList.map((p) => ({
+            ...p,
+            amount: Math.round((p.amount * total) / totalPaid * 100) / 100,
+          }))
+        : paymentsList;
 
     let paymentStatus: "PAID" | "PARTIAL" | "PENDING" = "PAID";
     if (balanceAmount > 0) {
@@ -226,7 +235,7 @@ export async function POST(request: NextRequest) {
           notes: validated.notes,
           saleItems: { create: saleItemsData },
           payments: {
-            create: paymentsList.map((p) => ({
+            create: paymentsToStore.map((p) => ({
               amount: p.amount,
               method: p.method,
               reference: p.reference,
@@ -240,11 +249,12 @@ export async function POST(request: NextRequest) {
         },
       });
 
-      // 3. Update customer only when linked (required for credit). Overpayment without customer = change given in cash, no advance stored.
+      // 3. Update customer only when linked. Revenue = total; when overpayment we give change so we only record total as received.
       if (customerId) {
-        const updates: { totalPurchases?: { increment: number }; totalPaid?: { increment: number }; totalDebt?: { increment: number }; totalAdvance?: { increment: number } } = {};
+        const cashBankReceived = overpaymentAmount > 0 ? total : totalPaidCashBank;
+        const updates: { totalPurchases?: { increment: number }; totalPaid?: { increment: number }; totalDebt?: { increment: number } } = {};
         updates.totalPurchases = { increment: total };
-        updates.totalPaid = { increment: totalPaidCashBank };
+        updates.totalPaid = { increment: cashBankReceived };
 
         if (balanceAmount > 0) {
           updates.totalDebt = { increment: balanceAmount };
@@ -255,19 +265,6 @@ export async function POST(request: NextRequest) {
               amount: balanceAmount,
               referenceId: newSale.id,
               description: `Credit Sale: ${newSale.saleNumber} — Balance Rs. ${balanceAmount.toLocaleString()}`,
-            },
-          });
-        }
-        // Only add overpayment to customer advance when customer was provided (optional: they chose to keep balance as advance)
-        if (overpaymentAmount > 0) {
-          updates.totalAdvance = { increment: overpaymentAmount };
-          await tx.customerTransaction.create({
-            data: {
-              customerId,
-              type: "ADVANCE_INC",
-              amount: overpaymentAmount,
-              referenceId: newSale.id,
-              description: `Overpayment (advance): ${newSale.saleNumber} — Rs. ${overpaymentAmount.toLocaleString()}`,
             },
           });
         }

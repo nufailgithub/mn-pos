@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Printer } from "lucide-react";
 import {
   Dialog,
@@ -16,10 +17,16 @@ interface BarcodeDisplayProps {
   productName: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Default quantity to print (e.g. product stock). Use 1 if not specified. */
+  defaultQuantity?: number;
 }
 
-export function BarcodeDisplay({ barcode, productName, open, onOpenChange }: BarcodeDisplayProps) {
+export function BarcodeDisplay({ barcode, productName, open, onOpenChange, defaultQuantity = 1 }: BarcodeDisplayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [printQuantity, setPrintQuantity] = useState(defaultQuantity);
+  useEffect(() => {
+    if (open && defaultQuantity >= 1) setPrintQuantity(defaultQuantity);
+  }, [open, defaultQuantity]);
 
   useEffect(() => {
     if (open && barcode && canvasRef.current) {
@@ -83,7 +90,7 @@ export function BarcodeDisplay({ barcode, productName, open, onOpenChange }: Bar
 
   const handlePrint = () => {
     if (!canvasRef.current) return;
-
+    const qty = Math.max(1, Math.min(printQuantity, 999));
     const printWindow = window.open("", "_blank");
     if (!printWindow) {
       alert("Please allow popups to print the barcode");
@@ -91,60 +98,45 @@ export function BarcodeDisplay({ barcode, productName, open, onOpenChange }: Bar
     }
 
     const imgData = canvasRef.current.toDataURL("image/png");
+    const singleLabel = `
+      <div class="barcode-container">
+        <div class="product-name">${productName}</div>
+        <img src="${imgData}" alt="Barcode" />
+        <div class="barcode-value">${barcode}</div>
+      </div>
+    `;
     const html = `
       <!DOCTYPE html>
       <html>
         <head>
-          <title>Barcode - ${productName}</title>
+          <title>Barcode - ${productName} (${qty})</title>
           <style>
-            body {
-              margin: 0;
-              padding: 20px;
-              display: flex;
-              flex-direction: column;
-              align-items: center;
-              justify-content: center;
-              font-family: Arial, sans-serif;
-            }
+            body { margin: 0; padding: 20px; font-family: Arial, sans-serif; }
             .barcode-container {
               text-align: center;
               width: 100%;
+              page-break-inside: avoid;
+              margin-bottom: 20px;
+              padding: 10px;
+              border: 1px dashed #ccc;
             }
-            .product-name {
-              font-size: 18px;
-              font-weight: bold;
-              margin-bottom: 15px;
-            }
-            .barcode-value {
-              font-size: 14px;
-              margin-top: 10px;
-              font-family: monospace;
-              color: #666;
-            }
+            .product-name { font-size: 16px; font-weight: bold; margin-bottom: 10px; }
+            .barcode-value { font-size: 12px; margin-top: 8px; font-family: monospace; color: #666; }
             img {
               max-width: 100%;
               height: auto;
               image-rendering: -webkit-optimize-contrast;
               image-rendering: crisp-edges;
             }
-            @page {
-              margin: 10mm;
-              size: A4;
-            }
+            @page { margin: 10mm; size: A4; }
             @media print {
-              body {
-                margin: 0;
-                padding: 0;
-              }
+              body { margin: 0; padding: 0; }
+              .barcode-container { border: none; margin-bottom: 8px; }
             }
           </style>
         </head>
         <body>
-          <div class="barcode-container">
-            <div class="product-name">${productName}</div>
-            <img src="${imgData}" alt="Barcode" />
-            <div class="barcode-value">${barcode}</div>
-          </div>
+          ${new Array(qty).fill(singleLabel).join("")}
         </body>
       </html>
     `;
@@ -171,10 +163,21 @@ export function BarcodeDisplay({ barcode, productName, open, onOpenChange }: Bar
             <canvas 
               ref={canvasRef} 
               className="max-w-full h-auto"
-              style={{ imageRendering: "pixelated" }} // Keep barcode crisp for printing
+              style={{ imageRendering: "pixelated" }}
             />
           </div>
           <div className="text-xs text-muted-foreground font-mono">Barcode: {barcode}</div>
+          <div className="flex items-center gap-2 w-full max-w-[200px]">
+            <label htmlFor="barcode-qty" className="text-sm font-medium whitespace-nowrap">Print quantity</label>
+            <Input
+              id="barcode-qty"
+              type="number"
+              min={1}
+              max={999}
+              value={printQuantity}
+              onChange={(e) => setPrintQuantity(Math.max(1, Math.min(999, Number(e.target.value) || 1)))}
+            />
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
@@ -182,7 +185,7 @@ export function BarcodeDisplay({ barcode, productName, open, onOpenChange }: Bar
           </Button>
           <Button onClick={handlePrint} className="gap-2">
             <Printer className="h-4 w-4" />
-            Print Barcode
+            Print {printQuantity} barcode{printQuantity !== 1 ? "s" : ""}
           </Button>
         </DialogFooter>
       </DialogContent>
