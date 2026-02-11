@@ -140,3 +140,18 @@ export async function recordSalaryPayment(
 export async function toggleEmployeeStatus(id: string, newStatus: EmployeeStatus) {
   return updateEmployee(id, { status: newStatus });
 }
+
+// Deactivate (soft delete) employee — keeps record for history
+export async function deleteEmployee(id: string) {
+  try {
+    await prisma.employee.update({
+      where: { id },
+      data: { status: "INACTIVE" },
+    });
+    revalidatePath("/dashboard/employees");
+    return { success: true };
+  } catch (error) {
+    console.error("Error deleting employee:", error);
+    return { success: false, error: "Failed to remove employee" };
+  }
+}

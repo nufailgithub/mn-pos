@@ -48,7 +48,7 @@ export default function NewBillPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
   const [billItems, setBillItems] = useState<BillItem[]>([]);
-  
+
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -56,7 +56,7 @@ export default function NewBillPage() {
   const [selectedSize, setSelectedSize] = useState<string>("");
   const [discount, setDiscount] = useState(0);
   const [discountType, setDiscountType] = useState<"PERCENTAGE" | "AMOUNT">("AMOUNT");
-  
+
   // Bill summary
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
@@ -73,7 +73,7 @@ export default function NewBillPage() {
   const calculateBillTotals = () => {
     const subtotal = billItems.reduce((sum, item) => sum + item.itemSubtotal, 0);
     let discountAmount = 0;
-    
+
     if (billDiscount > 0) {
       if (billDiscountType === "PERCENTAGE") {
         discountAmount = (subtotal * billDiscount) / 100;
@@ -81,17 +81,70 @@ export default function NewBillPage() {
         discountAmount = billDiscount;
       }
     }
-    
-    const tax = 0; 
+
+    const tax = 0;
     const total = Math.max(0, subtotal + tax - discountAmount);
     const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
     const balance = Math.max(0, total - totalPaid);
     const change = Math.max(0, totalPaid - total);
-    
+
     return { subtotal, tax, discount: discountAmount, total, totalPaid, balance, change };
   };
 
   const billSummary = calculateBillTotals();
+
+  // Persist bill state so it survives navigation / refresh
+  const BILL_STORAGE_KEY = "mncollection-pos-new-bill-v1";
+
+  // Load existing draft bill on first mount
+  useEffect(() => {
+    try {
+      const raw = typeof window !== "undefined" ? window.localStorage.getItem(BILL_STORAGE_KEY) : null;
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        billItems?: BillItem[];
+        customerName?: string;
+        customerPhone?: string;
+        billDiscount?: number;
+        billDiscountType?: "PERCENTAGE" | "AMOUNT";
+        notes?: string;
+        payments?: { method: string; amount: number; reference?: string }[];
+      };
+
+      if (parsed.billItems && Array.isArray(parsed.billItems)) {
+        setBillItems(parsed.billItems);
+      }
+      if (parsed.customerName) setCustomerName(parsed.customerName);
+      if (parsed.customerPhone) setCustomerPhone(parsed.customerPhone);
+      if (typeof parsed.billDiscount === "number") setBillDiscount(parsed.billDiscount);
+      if (parsed.billDiscountType) setBillDiscountType(parsed.billDiscountType);
+      if (parsed.notes) setNotes(parsed.notes);
+      if (parsed.payments && Array.isArray(parsed.payments)) setPayments(parsed.payments);
+    } catch {
+      // Ignore corrupted draft
+    }
+    // run only once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Save draft bill whenever key fields change
+  useEffect(() => {
+    try {
+      if (typeof window === "undefined") return;
+      const payload = JSON.stringify({
+        billItems,
+        customerName,
+        customerPhone,
+        billDiscount,
+        billDiscountType,
+        notes,
+        payments,
+      });
+      window.localStorage.setItem(BILL_STORAGE_KEY, payload);
+    } catch {
+      // Ignore storage failures (e.g. private mode)
+    }
+  }, [billItems, customerName, customerPhone, billDiscount, billDiscountType, notes, payments]);
 
   // Auto-fill payment amount when total changes - REMOVED per user request
   // Users should manually enter the amount they want to pay
@@ -103,23 +156,23 @@ export default function NewBillPage() {
   // }, [billSummary.total]);
 
   const handleAddPayment = () => {
-      const amount = Number(currentPaymentAmount);
-      if (!amount || amount <= 0) {
-          toast.error("Please enter a valid amount");
-          return;
-      }
-      // Allow overpayment: amount can exceed balance (change will be added as customer advance)
-      setPayments([...payments, {
-          method: currentPaymentMethod,
-          amount,
-          reference: currentPaymentReference
-      }]);
-      setCurrentPaymentAmount("");
-      setCurrentPaymentReference("");
+    const amount = Number(currentPaymentAmount);
+    if (!amount || amount <= 0) {
+      toast.error("Please enter a valid amount");
+      return;
+    }
+    // Allow overpayment: amount can exceed balance (change will be added as customer advance)
+    setPayments([...payments, {
+      method: currentPaymentMethod,
+      amount,
+      reference: currentPaymentReference
+    }]);
+    setCurrentPaymentAmount("");
+    setCurrentPaymentReference("");
   };
 
   const handleRemovePayment = (index: number) => {
-      setPayments(payments.filter((_, i) => i !== index));
+    setPayments(payments.filter((_, i) => i !== index));
   };
 
   // --- Product & Cart Logic ---
@@ -137,34 +190,34 @@ export default function NewBillPage() {
         setLoading(false);
       }
     };
-    
+
     const debounce = setTimeout(fetchProducts, 300);
     return () => clearTimeout(debounce);
   }, [search, category]);
 
   const handleBarcodeKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
-       handleBarcodeScan(barcodeInput);
+      handleBarcodeScan(barcodeInput);
     }
   };
 
   const handleBarcodeScan = async (code: string) => {
     if (!code) return;
-    
+
     // First check checked loaded products
     let product = products.find(p => p.productId === code || p.barcode === code);
-    
+
     // If not found, try to fetch specifically
     if (!product) {
-         try {
-             product = await productsApi.getByBarcode(code);
-         } catch(e) { 
-            // Fallback to searching if barcode specific endpoint fails/not exact
-            try {
-                const results = await productsApi.getAll({ search: code });
-                product = results.products.find(p => p.productId === code || p.barcode === code);
-            } catch (err) { /* ignore */ }
-         }
+      try {
+        product = await productsApi.getByBarcode(code);
+      } catch (e) {
+        // Fallback to searching if barcode specific endpoint fails/not exact
+        try {
+          const results = await productsApi.getAll({ search: code });
+          product = results.products.find(p => p.productId === code || p.barcode === code);
+        } catch (err) { /* ignore */ }
+      }
     }
 
     if (product) {
@@ -176,64 +229,64 @@ export default function NewBillPage() {
   };
 
   const handleProductSelect = (product: Product) => {
-      setSelectedProduct(product);
-      setQuantity(1);
-      setDiscount(0);
-      setDiscountType("AMOUNT");
-      // Default size selection if applicable
-      if (!product.freeSize && product.productSizes.length > 0) {
-          // Select first available size
-          const avail = product.productSizes.find(s => s.quantity > 0);
-          setSelectedSize(avail?.size || product.productSizes[0].size);
-      } else {
-          setSelectedSize("");
-      }
-      setDialogOpen(true);
+    setSelectedProduct(product);
+    setQuantity(1);
+    setDiscount(0);
+    setDiscountType("AMOUNT");
+    // Default size selection if applicable
+    if (!product.freeSize && product.productSizes.length > 0) {
+      // Select first available size
+      const avail = product.productSizes.find(s => s.quantity > 0);
+      setSelectedSize(avail?.size || product.productSizes[0].size);
+    } else {
+      setSelectedSize("");
+    }
+    setDialogOpen(true);
   };
 
   const calculateItemSubtotal = (price: number, qty: number, disc: number, type: "PERCENTAGE" | "AMOUNT") => {
-      const sub = price * qty;
-      let d = 0;
-      if (type === "PERCENTAGE") {
-          d = (sub * disc) / 100;
-      } else {
-          d = disc;
-      }
-      return Math.max(0, sub - d);
+    const sub = price * qty;
+    let d = 0;
+    if (type === "PERCENTAGE") {
+      d = (sub * disc) / 100;
+    } else {
+      d = disc;
+    }
+    return Math.max(0, sub - d);
   };
 
   const handleAddToBill = () => {
-      if (!selectedProduct) return;
-      
-      const available = selectedProduct.freeSize 
-          ? selectedProduct.productSizes[0]?.quantity || 0
-          : selectedProduct.productSizes.find(ps => ps.size === selectedSize)?.quantity || 0;
-          
-      if (quantity > available) {
-          toast.error(`Only ${available} items available in stock`);
-          return;
-      }
+    if (!selectedProduct) return;
 
-      const itemSubtotal = calculateItemSubtotal(selectedProduct.sellingPrice, quantity, discount, discountType);
+    const available = selectedProduct.freeSize
+      ? selectedProduct.productSizes[0]?.quantity || 0
+      : selectedProduct.productSizes.find(ps => ps.size === selectedSize)?.quantity || 0;
 
-      setBillItems([...billItems, {
-          productId: selectedProduct.id,
-          product: selectedProduct, // Store full object for UI
-          quantity,
-          price: selectedProduct.sellingPrice,
-          discount,
-          discountType,
-          size: selectedProduct.freeSize ? undefined : selectedSize,
-          itemSubtotal
-      }]);
+    if (quantity > available) {
+      toast.error(`Only ${available} items available in stock`);
+      return;
+    }
 
-      setDialogOpen(false);
-      // Reset selection
-      setSelectedProduct(null);
+    const itemSubtotal = calculateItemSubtotal(selectedProduct.sellingPrice, quantity, discount, discountType);
+
+    setBillItems([...billItems, {
+      productId: selectedProduct.id,
+      product: selectedProduct, // Store full object for UI
+      quantity,
+      price: selectedProduct.sellingPrice,
+      discount,
+      discountType,
+      size: selectedProduct.freeSize ? undefined : selectedSize,
+      itemSubtotal
+    }]);
+
+    setDialogOpen(false);
+    // Reset selection
+    setSelectedProduct(null);
   };
 
   const handleRemoveItem = (index: number) => {
-      setBillItems(billItems.filter((_, i) => i !== index));
+    setBillItems(billItems.filter((_, i) => i !== index));
   };
 
 
@@ -254,17 +307,17 @@ export default function NewBillPage() {
       const paymentsList = Array.isArray(payments) ? payments : [];
       const saleData = {
         items: billItems.map(item => ({
-             productId: item.productId,
-             quantity: Number(item.quantity),
-             price: Number(item.price),
-             discount: Number(item.discount) || 0,
-             size: item.size,
-             discountType: item.discount > 0 ? item.discountType : undefined
+          productId: item.productId,
+          quantity: Number(item.quantity),
+          price: Number(item.price),
+          discount: Number(item.discount) || 0,
+          size: item.size,
+          discountType: item.discount > 0 ? item.discountType : undefined
         })),
         payments: paymentsList.map(p => ({
-            method: p.method as "CASH" | "BANK_TRANSFER" | "CARD" | "MOBILE" | "CREDIT",
-            amount: p.amount,
-            reference: p.reference
+          method: p.method as "CASH" | "BANK_TRANSFER" | "CARD" | "MOBILE" | "CREDIT",
+          amount: p.amount,
+          reference: p.reference
         })),
         discount: Number(billDiscount) || 0,
         discountType: billDiscount > 0 ? billDiscountType : undefined,
@@ -276,11 +329,11 @@ export default function NewBillPage() {
       console.log("Creating sale with data:", saleData);
       const sale = await salesApi.create(saleData as any);
       toast.success(billSummary.balance > 0 ? "Bill created with Credit/Loan! 🎉" : "Bill created successfully! 🎉");
-      
+
       if (shouldPrint) {
         handlePrintBill(sale);
       }
-      
+
       // Reset
       setBillItems([]);
       setCustomerName("");
@@ -288,6 +341,15 @@ export default function NewBillPage() {
       setPayments([]);
       setBillDiscount(0);
       setNotes("");
+
+      // Clear stored draft
+      try {
+        if (typeof window !== "undefined") {
+          window.localStorage.removeItem(BILL_STORAGE_KEY);
+        }
+      } catch {
+        // ignore
+      }
     } catch (error: any) {
       console.error("Error creating bill:", error);
       toast.error(error.message || "Failed to create bill");
@@ -314,7 +376,7 @@ export default function NewBillPage() {
 
     const customerInfo = customerName ? `<div class="info">Customer: ${customerName}</div>` : "";
     const phoneInfo = customerPhone ? `<div class="info">Phone: ${customerPhone}</div>` : "";
-    
+
     // Payments HTML
     const paymentsHtml = payments.map(p => `
         <div class="total-row" style="font-size: 11px; color: #555;">
@@ -330,25 +392,30 @@ export default function NewBillPage() {
         </div>
     ` : "";
 
-    const changeHtml = billSummary.change > 0 ? `
+    // Overpayment is treated as customer advance
+    const advanceHtml = billSummary.change > 0 ? `
         <div class="total-row" style="margin-top: 5px; font-weight: bold; color: green;">
-            <span>Change:</span>
+            <span>Balance Amount:</span>
             <span>Rs. ${billSummary.change.toLocaleString()}</span>
         </div>
     ` : "";
 
     const itemsHtml = billItems.map((item) => {
-      const discountText = item.discount > 0 
-        ? ` <span style="color: green;">(-${item.discount})</span>` : "";
-      const sizeText = item.size ? `Size: ${item.size} • ` : "";
+      const sizeText = item.size ? item.size : "";
+      const discountText = item.discount > 0
+        ? (item.discountType === "PERCENTAGE"
+          ? `${item.discount}%`
+          : `Rs. ${item.discount.toLocaleString()}`
+        )
+        : "";
       return `
-        <div class="item">
-          <div class="item-name">${item.product.name}</div>
-          <div class="item-details">
-            ${sizeText}${item.quantity} × Rs. ${item.price.toLocaleString()}${discountText}
-          </div>
-          <div style="text-align: right;">Rs. ${item.itemSubtotal.toLocaleString()}</div>
-        </div>
+        <tr>
+          <td>${item.product.name}${sizeText ? ` (${sizeText})` : ""}</td>
+          <td style="text-align: center;">${item.quantity}</td>
+          <td style="text-align: right;">Rs. ${item.price.toLocaleString()}</td>
+          <td style="text-align: right;">${discountText}</td>
+          <td style="text-align: right;">Rs. ${item.itemSubtotal.toLocaleString()}</td>
+        </tr>
       `;
     }).join("");
 
@@ -359,25 +426,55 @@ export default function NewBillPage() {
     <style>
       @media print { @page { margin: 5mm; } }
       body { font-family: 'Courier New', monospace; max-width: 80mm; margin: 0 auto; padding: 10px; font-size: 12px; }
-      .header { text-align: center; border-bottom: 1px dashed #000; padding-bottom: 10px; margin-bottom: 10px; }
-      .header h1 { margin: 0; font-size: 18px; }
-      .info { margin: 5px 0; }
-      .item { display: flex; justify-content: space-between; margin-bottom: 5px; }
-      .item-name { flex: 1; font-weight: bold; }
-      .item-details { font-size: 10px; color: #444; margin-right: 5px; }
-      .totals { border-top: 1px dashed #000; padding-top: 5px; margin-top: 10px; }
+      .header { border-bottom: 1px dashed #000; padding-bottom: 8px; margin-bottom: 8px; display: flex; justify-content: space-between; gap: 6px; }
+      .header-left { text-align: left; }
+      .header-left h1 { margin: 0; font-size: 26px; font-weight: bold; }
+      .tagline { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;  text-align: right; }
+      .address { font-size: 10px; margin-top: 4px; }
+      .contact { font-size: 10px; }
+      .qr { text-align: right; }
+      .qr img { width: 60px; height: 60px; }
+      .info { margin: 4px 0; }
+      .meta { border-bottom: 1px dashed #000; padding-bottom: 4px; margin-bottom: 6px; font-size: 11px; }
+      table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+      th, td { padding: 3px 0; }
+      th { border-bottom: 1px solid #000; font-size: 11px; text-align: left; }
+      .totals { border-top: 1px dashed #000; padding-top: 5px; margin-top: 8px; }
       .total-row { display: flex; justify-content: space-between; margin: 3px 0; }
       .total-final { font-size: 14px; font-weight: bold; border-top: 1px solid #000; margin-top: 5px; padding-top: 2px; }
     </style>
   </head>
   <body>
     <div class="header">
-      <h1>RAHMATH POINT</h1>
-      <div class="info">Bill: ${saleNumber}</div>
-      <div class="info">${date}</div>
+      <div class="header-left">
+        <h1>M|N COLLECTION</h1>
+        <div class="tagline">WHERE VALUE MEETS QUALITY</div>
+        <div class="address">168/C, Fatha Hajiar Mawatha,<br/>Dharga Town</div>
+        <div class="contact">Tel: 0783714171 / 0774684087</div>
+      </div>
+      <div class="qr">
+        <img src="https://api.qrserver.com/v1/create-qr-code/?size=80x80&data=https%3A%2F%2Fchat.whatsapp.com%2FEu3HUPRtS24LHtytOz9ziP" alt="WhatsApp QR" />
+      </div>
+    </div>
+    <div class="meta">
+      <div>Bill: ${saleNumber}</div>
+      <div>${date}</div>
       ${customerInfo} ${phoneInfo}
     </div>
-    <div class="items">${itemsHtml}</div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 38%;">Item</th>
+          <th style="width: 10%; text-align: center;">Qty</th>
+          <th style="width: 18%; text-align: right;">Price</th>
+          <th style="width: 16%; text-align: right;">Disc</th>
+          <th style="width: 18%; text-align: right;">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${itemsHtml}
+      </tbody>
+    </table>
     <div class="totals">
       <div class="total-row"><span>Subtotal:</span><span>Rs. ${subtotal.toLocaleString()}</span></div>
       ${discountDisplay}
@@ -386,9 +483,10 @@ export default function NewBillPage() {
       ${paymentsHtml}
       <div class="total-row"><span>Total Paid:</span><span>Rs. ${totalPaid.toLocaleString()}</span></div>
       ${balanceHtml}
-      ${changeHtml}
+      ${advanceHtml}
     </div>
-    <div style="text-align: center; margin-top: 20px;">Thank you!</div>
+<div style="text-align: center; margin-top: 20px; font-size: 14px; font-weight: 500;">  Thank you for shopping with us! <br/>
+  We truly appreciate your trust and support.</div>
   </body>
 </html>`;
 
@@ -443,8 +541,8 @@ export default function NewBillPage() {
                 <CardDescription>Search and select products to add</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                 {/* Product List UI (Existing code remains same) */}
-                 <div className="flex gap-4">
+                {/* Product List UI (Existing code remains same) */}
+                <div className="flex gap-4">
                   <div className="relative flex-1">
                     <Search className="absolute left-3 top-3 text-muted-foreground h-4 w-4" />
                     <Input
@@ -466,27 +564,27 @@ export default function NewBillPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                 <div className="max-h-[400px] overflow-y-auto space-y-2">
+                <div className="max-h-[400px] overflow-y-auto space-y-2">
                   {loading && <p className="text-center text-muted-foreground py-8">Loading...</p>}
                   {!loading && products.length > 0 && products.map((product) => (
-                        <button
-                          key={product.id}
-                          type="button"
-                          onClick={() => handleProductSelect(product)}
-                          className="w-full flex items-center justify-between p-3 border rounded-lg hover:bg-muted/50 cursor-pointer transition-colors text-left"
-                        >
-                          <div className="flex-1">
-                            <div className="font-medium">{product.name}</div>
-                            <div className="text-sm text-muted-foreground">{product.productId} • Rs. {product.sellingPrice.toLocaleString()}</div>
-                          </div>
-                            <div className="text-right">
-                              <div className={`text-sm font-medium ${(product.totalQuantity || 0) <= product.stockAlertLimit ? "text-red-600" : "text-green-600"}`}>
-                                Stock: {product.totalQuantity || 0}
-                              </div>
-                            </div>
-                        </button>
-                    ))}
-                 </div>
+                    <button
+                      key={product.id}
+                      type="button"
+                      onClick={() => handleProductSelect(product)}
+                      className="w-full flex items-center justify-between p-3 border rounded-lg hover:bg-muted/50 cursor-pointer transition-colors text-left"
+                    >
+                      <div className="flex-1">
+                        <div className="font-medium">{product.name}</div>
+                        <div className="text-sm text-muted-foreground">{product.productId} • Rs. {product.sellingPrice.toLocaleString()}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className={`text-sm font-medium ${(product.totalQuantity || 0) <= product.stockAlertLimit ? "text-red-600" : "text-green-600"}`}>
+                          Stock: {product.totalQuantity || 0}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </CardContent>
             </Card>
           </div>
@@ -534,79 +632,79 @@ export default function NewBillPage() {
 
                 {/* Bill Discount */}
                 <div className="flex gap-2">
-                    <Input type="number" placeholder="Discount" value={billDiscount || ""} onChange={(e) => setBillDiscount(Number(e.target.value) || 0)} className="flex-1" />
-                    <Select value={billDiscountType} onValueChange={(v: any) => setBillDiscountType(v)}>
-                      <SelectTrigger className="w-[80px]"><SelectValue /></SelectTrigger>
-                      <SelectContent><SelectItem value="AMOUNT">Rs</SelectItem><SelectItem value="PERCENTAGE">%</SelectItem></SelectContent>
-                    </Select>
+                  <Input type="number" placeholder="Discount" value={billDiscount || ""} onChange={(e) => setBillDiscount(Number(e.target.value) || 0)} className="flex-1" />
+                  <Select value={billDiscountType} onValueChange={(v: any) => setBillDiscountType(v)}>
+                    <SelectTrigger className="w-[80px]"><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="AMOUNT">Rs</SelectItem><SelectItem value="PERCENTAGE">%</SelectItem></SelectContent>
+                  </Select>
                 </div>
 
                 {/* Payment Entry */}
                 <div className="border p-3 rounded-md bg-muted/20 space-y-3">
-                    <div className="text-sm font-medium">Add Payment</div>
-                    <div className="grid grid-cols-2 gap-2">
-                        <Select value={currentPaymentMethod} onValueChange={(v: any) => setCurrentPaymentMethod(v)}>
-                            <SelectTrigger><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="CASH">Cash</SelectItem>
-                                <SelectItem value="BANK_TRANSFER">Bank / UPI</SelectItem>
-                                <SelectItem value="CARD">Card</SelectItem>
-                                <SelectItem value="MOBILE">Mobile</SelectItem>
-                                <SelectItem value="CREDIT">Credit (remaining)</SelectItem>
-                            </SelectContent>
-                        </Select>
-                        <Input 
-                            type="number" 
-                            placeholder="Amount" 
-                            value={currentPaymentAmount} 
-                            onChange={(e) => setCurrentPaymentAmount(e.target.value)} 
-                        />
-                    </div>
-                    {currentPaymentMethod !== "CASH" && (
-                         <Input placeholder="Transaction Ref / ID" value={currentPaymentReference} onChange={(e) => setCurrentPaymentReference(e.target.value)} />
-                    )}
-                    <Button variant="secondary" className="w-full" onClick={handleAddPayment} disabled={!currentPaymentAmount || Number(currentPaymentAmount) <= 0}>
-                        Add Payment
-                    </Button>
+                  <div className="text-sm font-medium">Add Payment</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Select value={currentPaymentMethod} onValueChange={(v: any) => setCurrentPaymentMethod(v)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="CASH">Cash</SelectItem>
+                        <SelectItem value="BANK_TRANSFER">Bank / UPI</SelectItem>
+                        <SelectItem value="CARD">Card</SelectItem>
+                        <SelectItem value="MOBILE">Mobile</SelectItem>
+                        <SelectItem value="CREDIT">Credit (remaining)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      type="number"
+                      placeholder="Amount"
+                      value={currentPaymentAmount}
+                      onChange={(e) => setCurrentPaymentAmount(e.target.value)}
+                    />
+                  </div>
+                  {currentPaymentMethod !== "CASH" && (
+                    <Input placeholder="Transaction Ref / ID" value={currentPaymentReference} onChange={(e) => setCurrentPaymentReference(e.target.value)} />
+                  )}
+                  <Button variant="secondary" className="w-full" onClick={handleAddPayment} disabled={!currentPaymentAmount || Number(currentPaymentAmount) <= 0}>
+                    Add Payment
+                  </Button>
                 </div>
 
                 {/* Payment List */}
                 {payments.length > 0 && (
-                    <div className="space-y-2">
-                        {payments.map((p, i) => (
-                            <div key={i} className="flex justify-between items-center text-sm p-2 bg-muted rounded border">
-                                <div>
-                                    <span className="font-semibold">{p.method}</span>
-                                    {p.reference && <span className="text-xs text-muted-foreground"> ({p.reference})</span>}
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <span>Rs. {p.amount.toLocaleString()}</span>
-                                    <Trash2 className="h-3 w-3 cursor-pointer text-destructive" onClick={() => handleRemovePayment(i)} />
-                                </div>
-                            </div>
-                        ))}
-                    </div>
+                  <div className="space-y-2">
+                    {payments.map((p, i) => (
+                      <div key={i} className="flex justify-between items-center text-sm p-2 bg-muted rounded border">
+                        <div>
+                          <span className="font-semibold">{p.method}</span>
+                          {p.reference && <span className="text-xs text-muted-foreground"> ({p.reference})</span>}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span>Rs. {p.amount.toLocaleString()}</span>
+                          <Trash2 className="h-3 w-3 cursor-pointer text-destructive" onClick={() => handleRemovePayment(i)} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 )}
 
                 {/* Totals */}
                 <div className="border-t pt-4 space-y-2">
-                   <div className="flex justify-between text-sm"><span>Subtotal:</span><span>Rs. {billSummary.subtotal.toLocaleString()}</span></div>
-                   {billSummary.discount > 0 && <div className="flex justify-between text-sm text-green-600"><span>Discount:</span><span>- Rs. {billSummary.discount.toLocaleString()}</span></div>}
-                   <div className="flex justify-between text-lg font-bold border-t pt-2"><span>Total:</span><span>Rs. {billSummary.total.toLocaleString()}</span></div>
-                   
-                   <div className="flex justify-between text-sm text-muted-foreground mt-2"><span>Paid:</span><span>Rs. {billSummary.totalPaid.toLocaleString()}</span></div>
-                   {billSummary.balance > 0 && (
-                        <div className="flex justify-between text-sm font-bold text-red-600 bg-red-50 p-2 rounded">
-                            <span>Balance (Credit):</span>
-                            <span>Rs. {billSummary.balance.toLocaleString()}</span>
-                        </div>
-                   )}
-                   {billSummary.change > 0 && (
-                        <div className="flex justify-between text-sm font-bold text-green-600 bg-green-50 p-2 rounded">
-                            <span>Change:</span>
-                            <span>Rs. {billSummary.change.toLocaleString()}</span>
-                        </div>
-                   )}
+                  <div className="flex justify-between text-sm"><span>Subtotal:</span><span>Rs. {billSummary.subtotal.toLocaleString()}</span></div>
+                  {billSummary.discount > 0 && <div className="flex justify-between text-sm text-green-600"><span>Discount:</span><span>- Rs. {billSummary.discount.toLocaleString()}</span></div>}
+                  <div className="flex justify-between text-lg font-bold border-t pt-2"><span>Total:</span><span>Rs. {billSummary.total.toLocaleString()}</span></div>
+
+                  <div className="flex justify-between text-sm text-muted-foreground mt-2"><span>Paid:</span><span>Rs. {billSummary.totalPaid.toLocaleString()}</span></div>
+                  {billSummary.balance > 0 && (
+                    <div className="flex justify-between text-sm font-bold text-red-600 bg-red-50 p-2 rounded">
+                      <span>Balance (Credit):</span>
+                      <span>Rs. {billSummary.balance.toLocaleString()}</span>
+                    </div>
+                  )}
+                  {billSummary.change > 0 && (
+                    <div className="flex justify-between text-sm font-bold text-green-600 bg-green-50 p-2 rounded">
+                      <span>Balance:</span>
+                      <span>Rs. {billSummary.change.toLocaleString()}</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex gap-2">
@@ -621,7 +719,7 @@ export default function NewBillPage() {
             </Card>
           </div>
         </div>
-        
+
 
         {/* Add Product Dialog */}
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>

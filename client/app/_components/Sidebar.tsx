@@ -27,8 +27,7 @@ const menuItems = [
   { icon: Briefcase, label: "Employees", path: "/employees" },
   { icon: Layers2, label: "Stock", path: "/stock" },
   { icon: BarChart3, label: "Reports", path: "/reports" },
-  { icon: Users, label: "Users", path: "/users" },
-  { icon: Settings, label: "Settings", path: "/settings" },
+  { icon: Users, label: "Users", path: "/users" }
 ];
 
 export default function Sidebar() {
