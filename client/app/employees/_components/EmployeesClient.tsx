@@ -8,6 +8,7 @@ import {
     updateEmployee, 
     addSalaryAdvance,
     recordSalaryPayment,
+    deleteEmployee,
     type EmployeeWithAdvances
 } from "@/app/actions/employee";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Table,
   TableBody,
   TableCell,
@@ -35,10 +46,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Search, UserPlus, Pencil, Wallet, Calendar, Banknote } from "lucide-react";
+import { Search, UserPlus, Pencil, Wallet, Calendar, Banknote, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
-import { Badge } from "@/components/ui/badge";
 
 export default function EmployeesClient() {
   const [employees, setEmployees] = useState<EmployeeWithAdvances[]>([]);
@@ -69,13 +79,14 @@ export default function EmployeesClient() {
   const [salaryPaymentNote, setSalaryPaymentNote] = useState("");
   const [salaryPaymentSubmitting, setSalaryPaymentSubmitting] = useState(false);
 
-  // Salary History (per employee) - shown in dialog
   const [salaryHistoryOpen, setSalaryHistoryOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false);
 
   const fetchEmployees = async () => {
     setLoading(true);
     try {
-      const result = await getEmployees();
+      const result = await getEmployees(true);
       if (result.success && result.data) {
           setEmployees(result.data as EmployeeWithAdvances[]);
       }
@@ -243,7 +254,28 @@ export default function EmployeesClient() {
       return { byMonth: result, totalAdvances };
   };
 
-  // Remaining to pay for a specific month (after advance): used to pre-fill Pay Salary
+  const handleDeleteClick = (employee: EmployeeWithAdvances) => {
+    setSelectedEmployee(employee);
+    setDeleteDialogOpen(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!selectedEmployee) return;
+    setDeleteSubmitting(true);
+    try {
+      const res = await deleteEmployee(selectedEmployee.id);
+      if (res.success) {
+        toast.success("Employee removed");
+        setDeleteDialogOpen(false);
+        fetchEmployees();
+      } else toast.error(res.error);
+    } catch {
+      toast.error("Failed to remove employee");
+    } finally {
+      setDeleteSubmitting(false);
+    }
+  };
+
   const getRemainingToPayForMonth = (employee: EmployeeWithAdvances, monthKey: string): number => {
       const { byMonth } = getMonthlySummaryWithAdvance(employee);
       return byMonth[monthKey]?.remainingToPay ?? Math.max(0, employee.basicSalary - 0);
@@ -256,7 +288,7 @@ export default function EmployeesClient() {
             <div>
                 <h1 className="text-3xl font-bold tracking-tight">Employee Management</h1>
                 <p className="text-muted-foreground mt-2">
-                    Monthly salary = Advance (given earlier) + Remaining to pay. Pay only the remaining amount at month end.
+                    Manage staff, salary advances, and monthly payments in one place.
                 </p>
             </div>
             <Button onClick={handleOpenCreate} className="gap-2">
@@ -278,69 +310,74 @@ export default function EmployeesClient() {
 
         <Card>
             <CardHeader>
-                <CardTitle>Staff List</CardTitle>
+                <CardTitle>Staff</CardTitle>
+                <CardDescription>View and manage employees, salary advances, and payments.</CardDescription>
             </CardHeader>
             <CardContent>
-                <Table>
-                    <TableHeader>
-                        <TableRow>
-                            <TableHead>ID</TableHead>
-                            <TableHead>Name</TableHead>
-                            <TableHead>Phone</TableHead>
-                            <TableHead>Monthly Salary</TableHead>
-                            <TableHead>Remaining to pay (Salary − Advance)</TableHead>
-                            <TableHead className="text-right">Actions</TableHead>
-                        </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                         {loading ? (
-                            <TableRow><TableCell colSpan={6} className="text-center h-24">Loading...</TableCell></TableRow>
-                        ) : filteredEmployees.length === 0 ? (
-                            <TableRow><TableCell colSpan={6} className="text-center h-24">No employees found.</TableCell></TableRow>
-                        ) : (
-                            filteredEmployees.map(employee => {
-                                const byMonth = getMonthlySummary(employee);
-                                const totalRemainingBeforeAdvance = Object.values(byMonth).reduce((s, v) => s + Math.max(0, v.salary - v.paid), 0);
-                                const totalAdvances = employee.advances?.reduce((s, a) => s + a.amount, 0) ?? 0;
-                                const pendingTotal = Math.max(0, totalRemainingBeforeAdvance - totalAdvances);
-                                return (
-                                <TableRow key={employee.id}>
-                                    <TableCell className="font-mono text-xs">{employee.employeeId}</TableCell>
-                                    <TableCell className="font-medium">{employee.name}</TableCell>
-                                    <TableCell>{employee.phone || "-"}</TableCell>
-                                    <TableCell>Rs. {employee.basicSalary.toLocaleString()}</TableCell>
-                                    <TableCell>
-                                        <div className="text-sm">
-                                            <span className="text-muted-foreground">Salary Rs. {employee.basicSalary.toLocaleString()}</span>
-                                            {totalAdvances > 0 && (
-                                                <span className="text-muted-foreground"> − Advance Rs. {totalAdvances.toLocaleString()}</span>
-                                            )}
+                <div className="rounded-lg border overflow-hidden">
+                    <Table>
+                        <TableHeader>
+                            <TableRow className="bg-muted/50 hover:bg-muted/50">
+                                <TableHead className="font-semibold">Employee ID</TableHead>
+                                <TableHead className="font-semibold">Name</TableHead>
+                                <TableHead className="font-semibold">Phone</TableHead>
+                                <TableHead className="font-semibold">Monthly Salary</TableHead>
+                                <TableHead className="font-semibold">Balance</TableHead>
+                                <TableHead className="text-right font-semibold">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                             {loading ? (
+                                <TableRow><TableCell colSpan={6} className="text-center h-28 text-muted-foreground">Loading staff…</TableCell></TableRow>
+                            ) : filteredEmployees.length === 0 ? (
+                                <TableRow><TableCell colSpan={6} className="text-center h-28 text-muted-foreground">No employees found.</TableCell></TableRow>
+                            ) : (
+                                filteredEmployees.map((employee) => {
+                                    const byMonth = getMonthlySummary(employee);
+                                    const totalRemainingBeforeAdvance = Object.values(byMonth).reduce((s, v) => s + Math.max(0, v.salary - v.paid), 0);
+                                    const totalAdvances = employee.advances?.reduce((s, a) => s + a.amount, 0) ?? 0;
+                                    const pendingTotal = Math.max(0, totalRemainingBeforeAdvance - totalAdvances);
+                                    return (
+                                    <TableRow key={employee.id}>
+                                        <TableCell className="font-mono text-sm py-4">{employee.employeeId}</TableCell>
+                                        <TableCell className="font-medium py-4">{employee.name}</TableCell>
+                                        <TableCell className="py-4 text-muted-foreground">{employee.phone || "—"}</TableCell>
+                                        <TableCell className="py-4">Rs. {employee.basicSalary.toLocaleString()}</TableCell>
+                                        <TableCell className="py-4">
                                             {pendingTotal > 0 ? (
-                                                <span className="text-red-600 font-medium"> = Rs. {pendingTotal.toLocaleString()} to pay</span>
+                                                <span className="font-medium text-amber-600">Rs. {pendingTotal.toLocaleString()} due</span>
                                             ) : (
-                                                <span className="text-green-600 font-medium"> = Rs. 0 to pay</span>
+                                                <span className="text-muted-foreground">Up to date</span>
                                             )}
-                                        </div>
-                                    </TableCell>
-                                    <TableCell className="text-right space-x-2">
-                                        <Button variant="default" size="sm" onClick={() => handleOpenSalaryPayment(employee)} title="Pay Salary">
-                                            <Banknote className="h-4 w-4 mr-1" /> Pay Salary
-                                        </Button>
-                                        <Button variant="outline" size="sm" onClick={() => handleOpenAdvance(employee)} title="Give Advance">
-                                            <Wallet className="h-4 w-4 mr-1" /> Advance
-                                        </Button>
-                                        <Button variant="ghost" size="sm" onClick={() => { setSelectedEmployee(employee); setSalaryHistoryOpen(true); }}>
-                                            <Calendar className="h-4 w-4" />
-                                        </Button>
-                                        <Button variant="ghost" size="sm" onClick={() => handleOpenEdit(employee)}>
-                                            <Pencil className="h-4 w-4" />
-                                        </Button>
-                                    </TableCell>
-                                </TableRow>
-                            );})
-                        )}
-                    </TableBody>
-                </Table>
+                                            {totalAdvances > 0 && (
+                                                <span className="block text-xs text-muted-foreground mt-0.5">Advance: Rs. {totalAdvances.toLocaleString()}</span>
+                                            )}
+                                        </TableCell>
+                                        <TableCell className="text-right py-4">
+                                            <div className="flex items-center justify-end gap-1">
+                                                <Button variant="default" size="sm" onClick={() => handleOpenSalaryPayment(employee)} title="Pay Salary">
+                                                    <Banknote className="h-4 w-4 mr-1" /> Pay
+                                                </Button>
+                                                <Button variant="outline" size="sm" onClick={() => handleOpenAdvance(employee)} title="Give Advance">
+                                                    <Wallet className="h-4 w-4" />
+                                                </Button>
+                                                <Button variant="outline" size="sm" onClick={() => { setSelectedEmployee(employee); setSalaryHistoryOpen(true); }} title="Salary history">
+                                                    <Calendar className="h-4 w-4" />
+                                                </Button>
+                                                <Button variant="outline" size="sm" onClick={() => handleOpenEdit(employee)} title="Edit">
+                                                    <Pencil className="h-4 w-4" />
+                                                </Button>
+                                                <Button variant="ghost" size="sm" onClick={() => handleDeleteClick(employee)} title="Remove employee" className="text-destructive hover:text-destructive hover:bg-destructive/10">
+                                                    <Trash2 className="h-4 w-4" />
+                                                </Button>
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                );})
+                            )}
+                        </TableBody>
+                    </Table>
+                </div>
             </CardContent>
         </Card>
 
@@ -382,13 +419,12 @@ export default function EmployeesClient() {
             </DialogContent>
         </Dialog>
 
-        {/* Advance Modal — Advance is given FROM their monthly salary; remaining to pay = Salary − Advance */}
         <Dialog open={advanceDialogOpen} onOpenChange={setAdvanceDialogOpen}>
              <DialogContent>
                 <DialogHeader>
                     <DialogTitle>Give Advance</DialogTitle>
                     <DialogDescription>
-                        Advance is given from the employee&apos;s monthly salary. At month end you pay only the remainder: <strong>Salary − Advance = Amount to pay</strong>.
+                        Record an advance against this employee&apos;s salary. The amount will reduce what you pay at month end.
                     </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 py-4">
@@ -410,21 +446,20 @@ export default function EmployeesClient() {
              </DialogContent>
         </Dialog>
 
-        {/* Salary Payment Modal — Salary = Advance + Remaining to pay */}
         <Dialog open={salaryPaymentDialogOpen} onOpenChange={setSalaryPaymentDialogOpen}>
             <DialogContent>
                 <DialogHeader>
                     <DialogTitle>Pay Salary</DialogTitle>
                     <DialogDescription>
-                        Monthly salary = Advance (already given) + Remaining to pay. Enter the amount you are paying now.
+                        Enter the amount you are paying for the selected month. Any advance already given is shown below.
                     </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 py-4">
                     {selectedEmployee && (
                         <div className="rounded-lg border bg-muted/40 p-3 text-sm space-y-1">
                             <div className="flex justify-between"><span className="text-muted-foreground">Monthly salary</span><span className="font-semibold">Rs. {selectedEmployee.basicSalary.toLocaleString()}</span></div>
-                            <div className="flex justify-between"><span className="text-muted-foreground">Advance (already given)</span><span>Rs. {(selectedEmployee.advances?.reduce((s, a) => s + a.amount, 0) ?? 0).toLocaleString()}</span></div>
-                            <div className="flex justify-between pt-1 border-t"><span className="text-muted-foreground">Remaining to pay for selected month</span><span className="font-semibold text-primary">Rs. {getRemainingToPayForMonth(selectedEmployee, salaryForMonth).toLocaleString()}</span></div>
+                            <div className="flex justify-between"><span className="text-muted-foreground">Advance given</span><span>Rs. {(selectedEmployee.advances?.reduce((s, a) => s + a.amount, 0) ?? 0).toLocaleString()}</span></div>
+                            <div className="flex justify-between pt-1 border-t"><span className="text-muted-foreground">Amount due for this month</span><span className="font-semibold text-primary">Rs. {getRemainingToPayForMonth(selectedEmployee, salaryForMonth).toLocaleString()}</span></div>
                         </div>
                     )}
                     <div className="space-y-2">
@@ -440,7 +475,7 @@ export default function EmployeesClient() {
                         />
                     </div>
                     <div className="space-y-2">
-                        <label className="text-sm font-medium">Amount paying now (Rs)</label>
+                        <label className="text-sm font-medium">Amount (Rs)</label>
                         <Input type="number" placeholder="0.00" value={salaryPaymentAmount} onChange={(e) => setSalaryPaymentAmount(e.target.value)} />
                     </div>
                     <div className="space-y-2">
@@ -457,13 +492,12 @@ export default function EmployeesClient() {
             </DialogContent>
         </Dialog>
 
-        {/* Salary History Modal — Salary = Advance + Paid; Remaining to pay = Salary − Advance − Paid */}
         <Dialog open={salaryHistoryOpen} onOpenChange={setSalaryHistoryOpen}>
             <DialogContent className="max-w-2xl">
                 <DialogHeader>
-                    <DialogTitle>Monthly Salary History</DialogTitle>
+                    <DialogTitle>Salary History</DialogTitle>
                     <DialogDescription>
-                        <strong>Salary = Advance + Amount paid.</strong> For each month: remaining to pay = Salary − Advance used − Paid.
+                        Monthly breakdown: salary, advance applied, amount paid, and balance.
                     </DialogDescription>
                 </DialogHeader>
                 <div className="py-4">
@@ -481,17 +515,17 @@ export default function EmployeesClient() {
                             <>
                                 {totalAdvances > 0 && (
                                     <p className="text-sm text-muted-foreground mb-3">
-                                        Total advance (allocated to oldest months first): <strong>Rs. {totalAdvances.toLocaleString()}</strong>
+                                        Total advance given: <strong>Rs. {totalAdvances.toLocaleString()}</strong> (applied to older months first).
                                     </p>
                                 )}
                                 <Table>
                                     <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Month</TableHead>
-                                            <TableHead className="text-right">Salary</TableHead>
-                                            <TableHead className="text-right">Advance used</TableHead>
-                                            <TableHead className="text-right">Paid</TableHead>
-                                            <TableHead className="text-right">Remaining to pay</TableHead>
+                                        <TableRow className="bg-muted/50">
+                                            <TableHead className="font-semibold">Month</TableHead>
+                                            <TableHead className="text-right font-semibold">Salary</TableHead>
+                                            <TableHead className="text-right font-semibold">Advance</TableHead>
+                                            <TableHead className="text-right font-semibold">Paid</TableHead>
+                                            <TableHead className="text-right font-semibold">Balance</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -501,7 +535,7 @@ export default function EmployeesClient() {
                                                 <TableCell className="text-right">Rs. {v.salary.toLocaleString()}</TableCell>
                                                 <TableCell className="text-right text-muted-foreground">{v.advanceUsed > 0 ? `Rs. ${v.advanceUsed.toLocaleString()}` : "—"}</TableCell>
                                                 <TableCell className="text-right text-green-600">Rs. {v.paid.toLocaleString()}</TableCell>
-                                                <TableCell className="text-right">{v.remainingToPay > 0 ? <span className="text-red-600 font-medium">Rs. {v.remainingToPay.toLocaleString()}</span> : <span className="text-green-600">—</span>}</TableCell>
+                                                <TableCell className="text-right">{v.remainingToPay > 0 ? <span className="text-amber-600 font-medium">Rs. {v.remainingToPay.toLocaleString()}</span> : <span className="text-muted-foreground">—</span>}</TableCell>
                                             </TableRow>
                                         ))}
                                     </TableBody>
@@ -512,6 +546,29 @@ export default function EmployeesClient() {
                 </div>
             </DialogContent>
         </Dialog>
+
+        <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Remove employee</AlertDialogTitle>
+                    <AlertDialogDescription>
+                        {selectedEmployee && (
+                            <>Remove <strong>{selectedEmployee.name}</strong> from the staff list? Their record will be kept for history and they will no longer appear in the active list.</>
+                        )}
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                        onClick={(e) => { e.preventDefault(); handleConfirmDelete(); }}
+                        disabled={deleteSubmitting}
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    >
+                        {deleteSubmitting ? "Removing…" : "Remove"}
+                    </AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
 
        </div>
     </MainLayout>

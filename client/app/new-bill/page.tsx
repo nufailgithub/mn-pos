@@ -93,6 +93,59 @@ export default function NewBillPage() {
 
   const billSummary = calculateBillTotals();
 
+  // Persist bill state so it survives navigation / refresh
+  const BILL_STORAGE_KEY = "rahmath-pos-new-bill-v1";
+
+  // Load existing draft bill on first mount
+  useEffect(() => {
+    try {
+      const raw = typeof window !== "undefined" ? window.localStorage.getItem(BILL_STORAGE_KEY) : null;
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        billItems?: BillItem[];
+        customerName?: string;
+        customerPhone?: string;
+        billDiscount?: number;
+        billDiscountType?: "PERCENTAGE" | "AMOUNT";
+        notes?: string;
+        payments?: { method: string; amount: number; reference?: string }[];
+      };
+
+      if (parsed.billItems && Array.isArray(parsed.billItems)) {
+        setBillItems(parsed.billItems);
+      }
+      if (parsed.customerName) setCustomerName(parsed.customerName);
+      if (parsed.customerPhone) setCustomerPhone(parsed.customerPhone);
+      if (typeof parsed.billDiscount === "number") setBillDiscount(parsed.billDiscount);
+      if (parsed.billDiscountType) setBillDiscountType(parsed.billDiscountType);
+      if (parsed.notes) setNotes(parsed.notes);
+      if (parsed.payments && Array.isArray(parsed.payments)) setPayments(parsed.payments);
+    } catch {
+      // Ignore corrupted draft
+    }
+    // run only once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Save draft bill whenever key fields change
+  useEffect(() => {
+    try {
+      if (typeof window === "undefined") return;
+      const payload = JSON.stringify({
+        billItems,
+        customerName,
+        customerPhone,
+        billDiscount,
+        billDiscountType,
+        notes,
+        payments,
+      });
+      window.localStorage.setItem(BILL_STORAGE_KEY, payload);
+    } catch {
+      // Ignore storage failures (e.g. private mode)
+    }
+  }, [billItems, customerName, customerPhone, billDiscount, billDiscountType, notes, payments]);
+
   // Auto-fill payment amount when total changes - REMOVED per user request
   // Users should manually enter the amount they want to pay
   // useEffect(() => {
@@ -288,6 +341,15 @@ export default function NewBillPage() {
       setPayments([]);
       setBillDiscount(0);
       setNotes("");
+
+      // Clear stored draft
+      try {
+        if (typeof window !== "undefined") {
+          window.localStorage.removeItem(BILL_STORAGE_KEY);
+        }
+      } catch {
+        // ignore
+      }
     } catch (error: any) {
       console.error("Error creating bill:", error);
       toast.error(error.message || "Failed to create bill");
