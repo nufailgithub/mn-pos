@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import MainLayout from "../_components/MainLayout";
 import { Button } from "@/components/ui/button";
@@ -48,6 +48,8 @@ export default function NewBillPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
   const [billItems, setBillItems] = useState<BillItem[]>([]);
+  const barcodeTimeoutRef = useRef<NodeJS.Timeout>();
+  const [barcodeCache, setBarcodeCache] = useState<Map<string, Product>>(new Map());
 
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -146,14 +148,17 @@ export default function NewBillPage() {
     }
   }, [billItems, customerName, customerPhone, billDiscount, billDiscountType, notes, payments]);
 
-  // Auto-fill payment amount when total changes - REMOVED per user request
-  // Users should manually enter the amount they want to pay
-  // useEffect(() => {
-  //   if (billSummary.balance > 0 && !currentPaymentAmount) {
-  //       setCurrentPaymentAmount(billSummary.balance.toString());
-  //   }
-  //   // eslint-disable-next-line react-hooks/exhaustive-deps
-  // }, [billSummary.total]);
+  // Auto-focus barcode input when dialog closes
+  useEffect(() => {
+    if (!dialogOpen) {
+      setTimeout(() => {
+        const barcodeInput = document.querySelector('input[placeholder*="Scan barcode"]') as HTMLInputElement;
+        if (barcodeInput) {
+          barcodeInput.focus();
+        }
+      }, 100);
+    }
+  }, [dialogOpen]);
 
   const handleAddPayment = () => {
     const amount = Number(currentPaymentAmount);
@@ -161,7 +166,6 @@ export default function NewBillPage() {
       toast.error("Please enter a valid amount");
       return;
     }
-    // Allow overpayment: amount can exceed balance (change will be added as customer advance)
     setPayments([...payments, {
       method: currentPaymentMethod,
       amount,
@@ -195,36 +199,106 @@ export default function NewBillPage() {
     return () => clearTimeout(debounce);
   }, [search, category]);
 
-  const handleBarcodeKeyDown = (e: React.KeyboardEvent) => {
+  // Detect barcode format
+  const detectBarcodeFormat = (code: string): string => {
+    if (code.startsWith('20') && code.length === 13) {
+      return 'GTIN-13';
+    }
+    if (code.startsWith('0') && code.length === 13) {
+      return 'UPC-A';
+    }
+    if (code.length === 8) {
+      return 'EAN-8';
+    }
+    return 'CODE128';
+  };
+
+  // Handle barcode input change with auto-scan detection
+  const handleBarcodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setBarcodeInput(value);
+    
+    if (barcodeTimeoutRef.current) {
+      clearTimeout(barcodeTimeoutRef.current);
+    }
+    
+    // Auto-scan if it looks like a complete barcode (scanners input fast)
+    if (value.length >= 8 && /^[A-Z0-9-]+$/.test(value)) {
+      barcodeTimeoutRef.current = setTimeout(() => {
+        handleBarcodeScan(value);
+      }, 100);
+    }
+  };
+
+  const handleBarcodeKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
-      handleBarcodeScan(barcodeInput);
+      e.preventDefault();
+      if (barcodeInput.trim()) {
+        handleBarcodeScan(barcodeInput);
+      }
     }
   };
 
   const handleBarcodeScan = async (code: string) => {
-    if (!code) return;
-
-    // First check checked loaded products
-    let product = products.find(p => p.productId === code || p.barcode === code);
-
-    // If not found, try to fetch specifically
-    if (!product) {
-      try {
-        product = await productsApi.getByBarcode(code);
-      } catch (e) {
-        // Fallback to searching if barcode specific endpoint fails/not exact
-        try {
-          const results = await productsApi.getAll({ search: code });
-          product = results.products.find(p => p.productId === code || p.barcode === code);
-        } catch (err) { /* ignore */ }
-      }
+    if (!code.trim()) return;
+    
+    const trimmedCode = code.trim();
+    const format = detectBarcodeFormat(trimmedCode);
+    console.log(`Scanning barcode: ${trimmedCode} (${format})`);
+    
+    setBarcodeInput(""); // Clear immediately for next scan
+    
+    // Check cache first
+    if (barcodeCache.has(trimmedCode)) {
+      const product = barcodeCache.get(trimmedCode)!;
+      handleProductSelect(product);
+      toast.success(`${product.name} added`, { duration: 1500 });
+      return;
     }
 
-    if (product) {
-      handleProductSelect(product);
-      setBarcodeInput("");
-    } else {
-      toast.error("Product not found");
+    try {
+      // Try direct barcode match in loaded products first
+      let product = products.find(p => 
+        p.barcode === trimmedCode || p.productId === trimmedCode
+      );
+
+      // If not found, fetch specifically
+      if (!product) {
+        try {
+          product = await productsApi.getByBarcode(trimmedCode);
+          if (product) {
+            // Add to cache
+            setBarcodeCache(prev => new Map(prev).set(trimmedCode, product));
+          }
+        } catch (e) {
+          // Try searching as fallback
+          const results = await productsApi.getAll({ 
+            search: trimmedCode,
+            limit: 10 
+          });
+          product = results.products.find(p => 
+            p.barcode === trimmedCode || p.productId === trimmedCode
+          );
+          if (product) {
+            setBarcodeCache(prev => new Map(prev).set(trimmedCode, product));
+          }
+        }
+      }
+
+      if (product) {
+        handleProductSelect(product);
+        toast.success(`${product.name} added`, { 
+          duration: 1500,
+          icon: "📦"
+        });
+      } else {
+        toast.error("Product not found", { 
+          description: `Barcode: ${trimmedCode}` 
+        });
+      }
+    } catch (error) {
+      console.error("Barcode scan error:", error);
+      toast.error("Error scanning barcode");
     }
   };
 
@@ -271,7 +345,7 @@ export default function NewBillPage() {
 
     setBillItems([...billItems, {
       productId: selectedProduct.id,
-      product: selectedProduct, // Store full object for UI
+      product: selectedProduct,
       quantity,
       price: selectedProduct.sellingPrice,
       discount,
@@ -281,7 +355,6 @@ export default function NewBillPage() {
     }]);
 
     setDialogOpen(false);
-    // Reset selection
     setSelectedProduct(null);
   };
 
@@ -289,14 +362,12 @@ export default function NewBillPage() {
     setBillItems(billItems.filter((_, i) => i !== index));
   };
 
-
   const handleConfirmBill = async (shouldPrint: boolean = false) => {
     if (billItems.length === 0) {
       toast.error("Please add at least one item to the bill");
       return;
     }
 
-    // Customer required only when credit is used (balance left as credit or Credit payment selected)
     const needsCustomer = billSummary.balance > 0 || payments.some(p => p.method === "CREDIT");
     if (needsCustomer && (!customerName?.trim() || !customerPhone?.trim())) {
       toast.error("Customer name and phone are required when using Credit payment.");
@@ -326,9 +397,8 @@ export default function NewBillPage() {
         notes: notes.trim() || undefined
       };
 
-      console.log("Creating sale with data:", saleData);
       const sale = await salesApi.create(saleData as any);
-      toast.success(billSummary.balance > 0 ? "Bill created with Credit/Loan! 🎉" : "Bill created successfully! 🎉");
+      toast.success(billSummary.balance > 0 ? "Bill created with Credit! 🎉" : "Bill created successfully! 🎉");
 
       if (shouldPrint) {
         handlePrintBill(sale);
@@ -341,8 +411,8 @@ export default function NewBillPage() {
       setPayments([]);
       setBillDiscount(0);
       setNotes("");
+      setBarcodeCache(new Map()); // Clear cache
 
-      // Clear stored draft
       try {
         if (typeof window !== "undefined") {
           window.localStorage.removeItem(BILL_STORAGE_KEY);
@@ -377,7 +447,6 @@ export default function NewBillPage() {
     const customerInfo = customerName ? `<div class="info">Customer: ${customerName}</div>` : "";
     const phoneInfo = customerPhone ? `<div class="info">Phone: ${customerPhone}</div>` : "";
 
-    // Payments HTML
     const paymentsHtml = payments.map(p => `
         <div class="total-row" style="font-size: 11px; color: #555;">
             <span>${p.method}:</span>
@@ -392,7 +461,6 @@ export default function NewBillPage() {
         </div>
     ` : "";
 
-    // Overpayment is treated as customer advance
     const advanceHtml = billSummary.change > 0 ? `
         <div class="total-row" style="margin-top: 5px; font-weight: bold; color: green;">
             <span>Balance Amount:</span>
@@ -429,7 +497,7 @@ export default function NewBillPage() {
       .header { border-bottom: 1px dashed #000; padding-bottom: 8px; margin-bottom: 8px; display: flex; justify-content: space-between; gap: 6px; }
       .header-left { text-align: left; }
       .header-left h1 { margin: 0; font-size: 26px; font-weight: bold; }
-      .tagline { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;  text-align: right; }
+      .tagline { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; text-align: right; }
       .address { font-size: 10px; margin-top: 4px; }
       .contact { font-size: 10px; }
       .qr { text-align: right; }
@@ -485,15 +553,20 @@ export default function NewBillPage() {
       ${balanceHtml}
       ${advanceHtml}
     </div>
-<div style="text-align: center; margin-top: 20px; font-size: 14px; font-weight: 500;">  Thank you for shopping with us! <br/>
-  We truly appreciate your trust and support.</div>
+    <div style="text-align: center; margin-top: 20px; font-size: 14px; font-weight: 500;">
+      Thank you for shopping with us! <br/>
+      We truly appreciate your trust and support.
+    </div>
   </body>
 </html>`;
 
     printWindow.document.open();
     printWindow.document.write(printContent);
     printWindow.document.close();
-    setTimeout(() => { printWindow.print(); printWindow.close(); }, 250);
+    setTimeout(() => { 
+      printWindow.print(); 
+      printWindow.close(); 
+    }, 250);
   };
 
   return (
@@ -509,39 +582,54 @@ export default function NewBillPage() {
         <div className="grid gap-6 lg:grid-cols-3">
           {/* Left Column - Product Selection */}
           <div className="lg:col-span-2 space-y-4">
-            {/* Barcode Scanner & Search (Existing code remains same) */}
+            {/* Barcode Scanner */}
             <Card>
               <CardHeader>
                 <CardTitle>Scan Barcode</CardTitle>
-                <CardDescription>Scan or enter barcode to add product</CardDescription>
+                <CardDescription>
+                  Use SymCode scanner or enter barcode manually
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="flex gap-2">
                   <div className="relative flex-1">
                     <Scan className="absolute left-3 top-3 text-muted-foreground h-4 w-4" />
                     <Input
-                      placeholder="Scan barcode or enter manually..."
+                      placeholder="Ready to scan..."
                       value={barcodeInput}
-                      onChange={(e) => setBarcodeInput(e.target.value)}
+                      onChange={handleBarcodeChange}
                       onKeyDown={handleBarcodeKeyDown}
-                      className="pl-10"
+                      className="pl-10 font-mono"
                       autoFocus
+                      autoComplete="off"
                     />
+                    {barcodeInput && (
+                      <div className="absolute right-3 top-3">
+                        <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse" />
+                      </div>
+                    )}
                   </div>
-                  <Button onClick={() => handleBarcodeScan(barcodeInput)}>
-                    Scan
+                  <Button 
+                    onClick={() => handleBarcodeScan(barcodeInput)} 
+                    disabled={!barcodeInput.trim()}
+                    variant="secondary"
+                  >
+                    Add
                   </Button>
                 </div>
+                <p className="text-xs text-muted-foreground mt-2">
+                  Tip: Scanner works automatically. Manual entry: Enter barcode and press Enter
+                </p>
               </CardContent>
             </Card>
 
+            {/* Product Search */}
             <Card>
               <CardHeader>
                 <CardTitle>Available Products</CardTitle>
                 <CardDescription>Search and select products to add</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                {/* Product List UI (Existing code remains same) */}
                 <div className="flex gap-4">
                   <div className="relative flex-1">
                     <Search className="absolute left-3 top-3 text-muted-foreground h-4 w-4" />
@@ -575,7 +663,10 @@ export default function NewBillPage() {
                     >
                       <div className="flex-1">
                         <div className="font-medium">{product.name}</div>
-                        <div className="text-sm text-muted-foreground">{product.productId} • Rs. {product.sellingPrice.toLocaleString()}</div>
+                        <div className="text-sm text-muted-foreground">
+                          {product.productId} • Rs. {product.sellingPrice.toLocaleString()}
+                          {product.barcode && <span className="ml-2 text-xs">📱 {product.barcode}</span>}
+                        </div>
                       </div>
                       <div className="text-right">
                         <div className={`text-sm font-medium ${(product.totalQuantity || 0) <= product.stockAlertLimit ? "text-red-600" : "text-green-600"}`}>
@@ -607,11 +698,23 @@ export default function NewBillPage() {
                           <div className="font-medium text-sm">{item.product.name}</div>
                           <div className="text-xs text-muted-foreground">
                             {item.quantity} × Rs. {item.price}
-                            {item.discount > 0 && <span className="text-green-600"> (-{item.discount})</span>}
+                            {item.size && <span className="ml-1">({item.size})</span>}
+                            {item.discount > 0 && (
+                              <span className="text-green-600 ml-1">
+                                (-{item.discountType === "PERCENTAGE" ? `${item.discount}%` : `Rs. ${item.discount}`})
+                              </span>
+                            )}
                           </div>
-                          <div className="text-sm font-semibold mt-1">Rs. {item.itemSubtotal.toLocaleString()}</div>
+                          <div className="text-sm font-semibold mt-1">
+                            Rs. {item.itemSubtotal.toLocaleString()}
+                          </div>
                         </div>
-                        <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-destructive" onClick={() => handleRemoveItem(index)}>
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="h-8 w-8 p-0 text-destructive" 
+                          onClick={() => handleRemoveItem(index)}
+                        >
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
@@ -622,20 +725,41 @@ export default function NewBillPage() {
             </Card>
 
             <Card>
-              <CardHeader><CardTitle>Payment & Checkout</CardTitle></CardHeader>
+              <CardHeader>
+                <CardTitle>Payment & Checkout</CardTitle>
+              </CardHeader>
               <CardContent className="space-y-4">
-                {/* Customer Info - required only when Credit payment is used */}
+                {/* Customer Info */}
                 <div className="space-y-2">
-                  <Input placeholder="Customer Name (required for credit only)" value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
-                  <Input placeholder="Customer Phone (required for credit only)" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} />
+                  <Input 
+                    placeholder="Customer Name (required for credit only)" 
+                    value={customerName} 
+                    onChange={(e) => setCustomerName(e.target.value)} 
+                  />
+                  <Input 
+                    placeholder="Customer Phone (required for credit only)" 
+                    value={customerPhone} 
+                    onChange={(e) => setCustomerPhone(e.target.value)} 
+                  />
                 </div>
 
                 {/* Bill Discount */}
                 <div className="flex gap-2">
-                  <Input type="number" placeholder="Discount" value={billDiscount || ""} onChange={(e) => setBillDiscount(Number(e.target.value) || 0)} className="flex-1" />
+                  <Input 
+                    type="number" 
+                    placeholder="Discount" 
+                    value={billDiscount || ""} 
+                    onChange={(e) => setBillDiscount(Number(e.target.value) || 0)} 
+                    className="flex-1" 
+                  />
                   <Select value={billDiscountType} onValueChange={(v: any) => setBillDiscountType(v)}>
-                    <SelectTrigger className="w-[80px]"><SelectValue /></SelectTrigger>
-                    <SelectContent><SelectItem value="AMOUNT">Rs</SelectItem><SelectItem value="PERCENTAGE">%</SelectItem></SelectContent>
+                    <SelectTrigger className="w-[80px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="AMOUNT">Rs</SelectItem>
+                      <SelectItem value="PERCENTAGE">%</SelectItem>
+                    </SelectContent>
                   </Select>
                 </div>
 
@@ -644,13 +768,15 @@ export default function NewBillPage() {
                   <div className="text-sm font-medium">Add Payment</div>
                   <div className="grid grid-cols-2 gap-2">
                     <Select value={currentPaymentMethod} onValueChange={(v: any) => setCurrentPaymentMethod(v)}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="CASH">Cash</SelectItem>
                         <SelectItem value="BANK_TRANSFER">Bank / UPI</SelectItem>
                         <SelectItem value="CARD">Card</SelectItem>
                         <SelectItem value="MOBILE">Mobile</SelectItem>
-                        <SelectItem value="CREDIT">Credit (remaining)</SelectItem>
+                        <SelectItem value="CREDIT">Credit</SelectItem>
                       </SelectContent>
                     </Select>
                     <Input
@@ -661,9 +787,18 @@ export default function NewBillPage() {
                     />
                   </div>
                   {currentPaymentMethod !== "CASH" && (
-                    <Input placeholder="Transaction Ref / ID" value={currentPaymentReference} onChange={(e) => setCurrentPaymentReference(e.target.value)} />
+                    <Input 
+                      placeholder="Transaction Ref / ID" 
+                      value={currentPaymentReference} 
+                      onChange={(e) => setCurrentPaymentReference(e.target.value)} 
+                    />
                   )}
-                  <Button variant="secondary" className="w-full" onClick={handleAddPayment} disabled={!currentPaymentAmount || Number(currentPaymentAmount) <= 0}>
+                  <Button 
+                    variant="secondary" 
+                    className="w-full" 
+                    onClick={handleAddPayment} 
+                    disabled={!currentPaymentAmount || Number(currentPaymentAmount) <= 0}
+                  >
                     Add Payment
                   </Button>
                 </div>
@@ -679,7 +814,10 @@ export default function NewBillPage() {
                         </div>
                         <div className="flex items-center gap-2">
                           <span>Rs. {p.amount.toLocaleString()}</span>
-                          <Trash2 className="h-3 w-3 cursor-pointer text-destructive" onClick={() => handleRemovePayment(i)} />
+                          <Trash2 
+                            className="h-3 w-3 cursor-pointer text-destructive" 
+                            onClick={() => handleRemovePayment(i)} 
+                          />
                         </div>
                       </div>
                     ))}
@@ -688,11 +826,25 @@ export default function NewBillPage() {
 
                 {/* Totals */}
                 <div className="border-t pt-4 space-y-2">
-                  <div className="flex justify-between text-sm"><span>Subtotal:</span><span>Rs. {billSummary.subtotal.toLocaleString()}</span></div>
-                  {billSummary.discount > 0 && <div className="flex justify-between text-sm text-green-600"><span>Discount:</span><span>- Rs. {billSummary.discount.toLocaleString()}</span></div>}
-                  <div className="flex justify-between text-lg font-bold border-t pt-2"><span>Total:</span><span>Rs. {billSummary.total.toLocaleString()}</span></div>
+                  <div className="flex justify-between text-sm">
+                    <span>Subtotal:</span>
+                    <span>Rs. {billSummary.subtotal.toLocaleString()}</span>
+                  </div>
+                  {billSummary.discount > 0 && (
+                    <div className="flex justify-between text-sm text-green-600">
+                      <span>Discount:</span>
+                      <span>- Rs. {billSummary.discount.toLocaleString()}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between text-lg font-bold border-t pt-2">
+                    <span>Total:</span>
+                    <span>Rs. {billSummary.total.toLocaleString()}</span>
+                  </div>
 
-                  <div className="flex justify-between text-sm text-muted-foreground mt-2"><span>Paid:</span><span>Rs. {billSummary.totalPaid.toLocaleString()}</span></div>
+                  <div className="flex justify-between text-sm text-muted-foreground mt-2">
+                    <span>Paid:</span>
+                    <span>Rs. {billSummary.totalPaid.toLocaleString()}</span>
+                  </div>
                   {billSummary.balance > 0 && (
                     <div className="flex justify-between text-sm font-bold text-red-600 bg-red-50 p-2 rounded">
                       <span>Balance (Credit):</span>
@@ -708,10 +860,21 @@ export default function NewBillPage() {
                 </div>
 
                 <div className="flex gap-2">
-                  <Button className="flex-1" size="lg" variant="outline" onClick={() => handleConfirmBill(false)} disabled={billItems.length === 0}>
+                  <Button 
+                    className="flex-1" 
+                    size="lg" 
+                    variant="outline" 
+                    onClick={() => handleConfirmBill(false)} 
+                    disabled={billItems.length === 0}
+                  >
                     Save Bill
                   </Button>
-                  <Button className="flex-1" size="lg" onClick={() => handleConfirmBill(true)} disabled={billItems.length === 0}>
+                  <Button 
+                    className="flex-1" 
+                    size="lg" 
+                    onClick={() => handleConfirmBill(true)} 
+                    disabled={billItems.length === 0}
+                  >
                     <Printer className="h-4 w-4 mr-2" /> Print
                   </Button>
                 </div>
@@ -719,7 +882,6 @@ export default function NewBillPage() {
             </Card>
           </div>
         </div>
-
 
         {/* Add Product Dialog */}
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -741,13 +903,18 @@ export default function NewBillPage() {
                     Profit: Rs. {(selectedProduct.sellingPrice - selectedProduct.costPrice).toLocaleString()} (
                     {Math.round(((selectedProduct.sellingPrice - selectedProduct.costPrice) / selectedProduct.costPrice) * 100)}%)
                   </div>
+                  {selectedProduct.barcode && (
+                    <div className="text-xs">
+                      Barcode: <span className="font-mono">{selectedProduct.barcode}</span>
+                    </div>
+                  )}
                 </div>
               )}
             </DialogHeader>
 
             {selectedProduct && (
               <div className="space-y-4 py-4">
-                {/* Size Selection (for sized products) */}
+                {/* Size Selection */}
                 {!selectedProduct.freeSize && (
                   <div className="space-y-2">
                     <label htmlFor="size-select" className="text-sm font-medium">Size</label>
