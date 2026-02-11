@@ -9,7 +9,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
   useBarcodeScanner();
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex min-h-screen">
       <Sidebar />
       
       {/* Main Content Area */}
