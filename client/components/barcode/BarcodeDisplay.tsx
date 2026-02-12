@@ -55,10 +55,10 @@ export function BarcodeDisplay({
 
         JsBarcode(svgRef.current!, barcode, {
           format: "CODE128",
-          width: 1.8,
-          height: 35,
-          displayValue: false,
-          margin: 0,
+          width: 2.2,
+          height: 45,
+          displayValue: true,
+          margin: 2,
           lineColor: "#000000",
           background: "#ffffff",
         });
@@ -85,10 +85,10 @@ export function BarcodeDisplay({
     try {
       JsBarcode(svg, code, {
         format: "CODE128",
-        width: 1.8,
-        height: 35,
-        displayValue: false,
-        margin: 0,
+        width: 2.2,
+        height: 45,
+        displayValue: true,
+        margin: 2,
         lineColor: "#000000",
         background: "#ffffff",
       });
@@ -165,7 +165,7 @@ export function BarcodeDisplay({
             }
 
             .product-name {
-              font-size: 12px;
+              font-size: 9px;
               font-weight: bold;
               width: 100%;
               white-space: nowrap;
@@ -173,7 +173,7 @@ export function BarcodeDisplay({
               text-overflow: ellipsis;
               color: black;
               line-height: 1.2;
-              height: 3.5mm;
+              height: 3mm;
               text-align: center;
               text-transform: uppercase;
               letter-spacing: 0.3px;
@@ -185,7 +185,7 @@ export function BarcodeDisplay({
               align-items: center;
               width: 100%;
               background: white;
-              height: 10mm;
+              height: 12mm;
               margin: 0.2mm 0;
             }
 
@@ -206,8 +206,8 @@ export function BarcodeDisplay({
               justify-content: space-between;
               align-items: center;
               width: 100%;
-              font-size: 7px;
-              height: 3.5mm;
+              font-size: 6px;
+              height: 3mm;
               line-height: 1;
             }
 
