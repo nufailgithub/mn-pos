@@ -10,6 +10,15 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
 
+    // Check if any users already exist - signup only allowed if no users exist
+    const userCount = await prisma.user.count();
+    if (userCount > 0) {
+      return NextResponse.json(
+        { message: "Signup is disabled. Please contact an administrator." },
+        { status: 403 }
+      );
+    }
+
     // Validate request body
     const validation = signupSchema.safeParse(body);
 
@@ -38,13 +47,13 @@ export async function POST(request: Request) {
     // Hash password with Argon2
     const hashedPassword = await hashPassword(password);
 
-    // Create user
+    // Create user - first user is always ADMIN
     const user = await prisma.user.create({
       data: {
         name,
         email,
         password: hashedPassword,
-        role: "CASHIER",
+        role: "ADMIN", // First user should be ADMIN
         isActive: true,
       },
       select: {
