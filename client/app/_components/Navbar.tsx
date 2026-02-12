@@ -13,6 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { PrinterButton } from "@/components/Navbarprinterbutton";
 
 export default function Navbar() {
     const router = useRouter();
@@ -32,14 +33,15 @@ export default function Navbar() {
     
     return (
         <div className="flex justify-between items-center px-4 sm:px-6 lg:px-8 py-3 border-b bg-background sticky top-0 z-30">
-            <div className="lg:hidden w-10" /> {/* Spacer for mobile menu button */}
+            <div className="lg:hidden w-10" />
             
             <div className="flex-1 lg:flex-none">
                 <h1 className="text-lg font-semibold text-center lg:text-left">MN Collection</h1>
             </div>
             
             <div className="flex items-center gap-2">
-                <ModeToggle /> 
+                <PrinterButton />
+                <ModeToggle />
                 {session?.user && (
                     <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -66,5 +68,5 @@ export default function Navbar() {
                 )}
             </div>
         </div>
-    )
+    );
 }

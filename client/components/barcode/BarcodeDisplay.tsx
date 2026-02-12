@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import JsBarcode from "jsbarcode";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Printer } from "lucide-react";
@@ -15,128 +16,268 @@ import {
 interface BarcodeDisplayProps {
   barcode: string;
   productName: string;
+  price?: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Default quantity to print (e.g. product stock). Use 1 if not specified. */
   defaultQuantity?: number;
 }
 
-export function BarcodeDisplay({ barcode, productName, open, onOpenChange, defaultQuantity = 1 }: BarcodeDisplayProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+// Label physical dimensions (mm)
+const LABEL_W_MM = 40;
+const LABEL_H_MM = 20;
+
+// Render at 300 DPI for thermal printer sharpness
+// 1 inch = 25.4mm, so pixels = mm * (300/25.4)
+const DPI = 300;
+const MM_TO_PX = DPI / 25.4;
+
+const LABEL_W_PX = Math.round(LABEL_W_MM * MM_TO_PX); // ~472px
+const LABEL_H_PX = Math.round(LABEL_H_MM * MM_TO_PX); // ~236px
+
+export function BarcodeDisplay({
+  barcode,
+  productName,
+  price = 0,
+  open,
+  onOpenChange,
+  defaultQuantity = 1,
+}: BarcodeDisplayProps) {
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const [printQuantity, setPrintQuantity] = useState(defaultQuantity);
-  useEffect(() => {
-    if (open && defaultQuantity >= 1) setPrintQuantity(defaultQuantity);
-  }, [open, defaultQuantity]);
+  const [labelDataUrl, setLabelDataUrl] = useState<string>("");
 
-  useEffect(() => {
-    if (open && barcode && canvasRef.current) {
-      // Dynamically import jsbarcode only when needed
-      import("jsbarcode")
-        .then((JsBarcode) => {
-          if (!canvasRef.current) return;
-          try {
-            // Set canvas size for proper barcode rendering
-            canvasRef.current.width = 600;
-            canvasRef.current.height = 200;
-            
-            // Generate visual barcode with bars/lines
-            JsBarcode.default(canvasRef.current, barcode, {
-              format: "CODE128", // Standard barcode format used in retail
-              width: 2, // Width of each bar (thinner bars)
-              height: 120, // Height of the bars (taller for better scanning)
-              displayValue: true, // Show the barcode number below
-              fontSize: 18,
-              margin: 15,
-              marginTop: 15,
-              marginBottom: 15,
-              marginLeft: 15,
-              marginRight: 15,
-              background: "#ffffff", // White background
-              lineColor: "#000000", // Black bars
-              textAlign: "center",
-              textPosition: "bottom",
-              textMargin: 8,
-            });
-          } catch (error) {
-            console.error("Error generating barcode:", error);
-            drawTextFallback();
-          }
-        })
-        .catch((error) => {
-          console.warn("jsbarcode library not installed. Please run: npm install jsbarcode @types/jsbarcode");
-          console.error("Error loading jsbarcode:", error);
-          // Fallback: display barcode as text if library fails
-          drawTextFallback();
-        });
+  const formatPrice = (amount: number) => {
+    return new Intl.NumberFormat("si-LK", {
+      style: "currency",
+      currency: "LKR",
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    })
+      .format(amount)
+      .replace("LKR", "Rs.");
+  };
+
+  /**
+   * Core renderer: draws a full label onto a canvas at the given pixel size.
+   * Using canvas avoids all SVG anti-aliasing and browser scaling artifacts.
+   * The thermal printer receives a crisp 1-bit-style PNG with no blurry edges.
+   */
+  const renderLabelToCanvas = (
+    canvas: HTMLCanvasElement,
+    w: number,
+    h: number
+  ) => {
+    const ctx = canvas.getContext("2d")!;
+    canvas.width = w;
+    canvas.height = h;
+
+    // ── Background ──────────────────────────────────────────────────────────
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, w, h);
+
+    // ── Product name ─────────────────────────────────────────────────────────
+    const nameFontSize = Math.round(h * 0.13); // ~13% of label height
+    ctx.fillStyle = "#000000";
+    ctx.font = `bold ${nameFontSize}px Arial, Helvetica, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+
+    // Truncate if too wide
+    let displayName = productName.toUpperCase();
+    const maxWidth = w * 0.92;
+    while (
+      ctx.measureText(displayName).width > maxWidth &&
+      displayName.length > 1
+    ) {
+      displayName = displayName.slice(0, -1);
+    }
+    if (displayName !== productName.toUpperCase()) {
+      displayName = displayName.slice(0, -1) + "…";
+    }
+    ctx.fillText(displayName, w / 2, Math.round(h * 0.03));
+
+    // ── Barcode via JsBarcode → temp SVG → canvas ────────────────────────────
+    // JsBarcode can render to a canvas element directly — this is the key fix.
+    // Direct canvas rendering bypasses all SVG path rasterisation artifacts.
+    const barcodeCanvas = document.createElement("canvas");
+    const bcH = Math.round(h * 0.58);
+    const bcW = Math.round(w * 0.92);
+
+    try {
+      JsBarcode(barcodeCanvas, barcode, {
+        format: "CODE128",
+        width: 3,          // bar width multiplier (integer = no fractional bars)
+        height: bcH,
+        displayValue: true,
+        font: "Arial",
+        fontSize: Math.round(h * 0.09),
+        margin: 0,
+        lineColor: "#000000",
+        background: "#ffffff",
+        textMargin: 2,
+      });
+
+      // Scale-fit the barcode canvas into the label, centred
+      const bcActualW = barcodeCanvas.width;
+      const bcActualH = barcodeCanvas.height;
+      const scale = Math.min(bcW / bcActualW, bcH / bcActualH);
+      const drawW = Math.round(bcActualW * scale);
+      const drawH = Math.round(bcActualH * scale);
+      const drawX = Math.round((w - drawW) / 2);
+      const drawY = Math.round(h * 0.17);
+
+      // Disable image smoothing → keeps bars sharp, no anti-aliasing blur
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(barcodeCanvas, drawX, drawY, drawW, drawH);
+    } catch (err) {
+      console.error("Barcode generation error:", err);
     }
 
-    function drawTextFallback() {
-      if (canvasRef.current) {
-        const ctx = canvasRef.current.getContext("2d");
-        if (ctx) {
-          canvasRef.current.width = 600;
-          canvasRef.current.height = 200;
-          ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-          ctx.fillStyle = "#000";
-          ctx.font = "bold 24px monospace";
-          ctx.textAlign = "center";
-          ctx.fillText(barcode, canvasRef.current.width / 2, canvasRef.current.height / 2);
-          ctx.font = "14px Arial";
-          ctx.fillText("(Install jsbarcode for visual barcode)", canvasRef.current.width / 2, canvasRef.current.height / 2 + 30);
-        }
+    // ── Price badge ──────────────────────────────────────────────────────────
+    const footerY = Math.round(h * 0.84);
+    const priceFontSize = Math.round(h * 0.13);
+    ctx.font = `bold ${priceFontSize}px Arial, Helvetica, sans-serif`;
+    ctx.textAlign = "right";
+    ctx.textBaseline = "top";
+
+    const priceText = formatPrice(price);
+    const priceMetrics = ctx.measureText(priceText);
+    const badgePad = Math.round(w * 0.018);
+    const badgeW = priceMetrics.width + badgePad * 2;
+    const badgeH = priceFontSize + Math.round(h * 0.04);
+    const badgeX = w - Math.round(w * 0.04) - badgeW;
+    const badgeRadius = Math.round(h * 0.03);
+
+    // Draw price background pill
+    ctx.fillStyle = "#e8e8e8";
+    ctx.beginPath();
+    ctx.moveTo(badgeX + badgeRadius, footerY);
+    ctx.lineTo(badgeX + badgeW - badgeRadius, footerY);
+    ctx.quadraticCurveTo(badgeX + badgeW, footerY, badgeX + badgeW, footerY + badgeRadius);
+    ctx.lineTo(badgeX + badgeW, footerY + badgeH - badgeRadius);
+    ctx.quadraticCurveTo(badgeX + badgeW, footerY + badgeH, badgeX + badgeW - badgeRadius, footerY + badgeH);
+    ctx.lineTo(badgeX + badgeRadius, footerY + badgeH);
+    ctx.quadraticCurveTo(badgeX, footerY + badgeH, badgeX, footerY + badgeH - badgeRadius);
+    ctx.lineTo(badgeX, footerY + badgeRadius);
+    ctx.quadraticCurveTo(badgeX, footerY, badgeX + badgeRadius, footerY);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "#000000";
+    ctx.fillText(priceText, badgeX + badgeW - badgePad, footerY + Math.round(h * 0.02));
+  };
+
+  // ── Render preview canvas whenever dialog opens ──────────────────────────
+  useEffect(() => {
+    if (!open || !barcode) return;
+
+    const timer = setTimeout(() => {
+      // Preview canvas: display at 2× label size scaled by CSS (looks sharp on retina too)
+      const PREVIEW_SCALE = 3;
+      const pw = LABEL_W_PX * PREVIEW_SCALE;
+      const ph = LABEL_H_PX * PREVIEW_SCALE;
+
+      if (previewCanvasRef.current) {
+        renderLabelToCanvas(previewCanvasRef.current, pw, ph);
       }
-    }
-  }, [open, barcode]);
 
+      // Also pre-render the full 300 DPI print version for instant printing
+      const printCanvas = document.createElement("canvas");
+      renderLabelToCanvas(printCanvas, LABEL_W_PX, LABEL_H_PX);
+      setLabelDataUrl(printCanvas.toDataURL("image/png"));
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, [open, barcode, productName, price]);
+
+  // ── Print handler ─────────────────────────────────────────────────────────
   const handlePrint = () => {
-    if (!canvasRef.current) return;
     const qty = Math.max(1, Math.min(printQuantity, 999));
     const printWindow = window.open("", "_blank");
+
     if (!printWindow) {
       alert("Please allow popups to print the barcode");
       return;
     }
 
-    const imgData = canvasRef.current.toDataURL("image/png");
-    const singleLabel = `
-      <div class="barcode-container">
-        <div class="product-name">${productName}</div>
-        <img src="${imgData}" alt="Barcode" />
-        <div class="barcode-value">${barcode}</div>
+    if (!labelDataUrl) {
+      alert("Label not ready yet, please try again.");
+      return;
+    }
+
+    // Each label is a <img> sized exactly to the physical label dimensions.
+    // Using a PNG image (not SVG) guarantees the thermal printer receives
+    // raster data with no rasterisation step — bars stay crisp and scannable.
+    const labelImg = `
+      <div class="label">
+        <img src="${labelDataUrl}" width="${LABEL_W_PX}" height="${LABEL_H_PX}" alt="barcode label" />
       </div>
     `;
+
     const html = `
       <!DOCTYPE html>
       <html>
         <head>
-          <title>Barcode - ${productName} (${qty})</title>
+          <title>Print Barcode</title>
           <style>
-            body { margin: 0; padding: 20px; font-family: Arial, sans-serif; }
-            .barcode-container {
-              text-align: center;
-              width: 100%;
-              page-break-inside: avoid;
-              margin-bottom: 20px;
-              padding: 10px;
-              border: 1px dashed #ccc;
+            * {
+              margin: 0;
+              padding: 0;
+              box-sizing: border-box;
             }
-            .product-name { font-size: 16px; font-weight: bold; margin-bottom: 10px; }
-            .barcode-value { font-size: 12px; margin-top: 8px; font-family: monospace; color: #666; }
-            img {
-              max-width: 100%;
-              height: auto;
-              image-rendering: -webkit-optimize-contrast;
-              image-rendering: crisp-edges;
+
+            html, body {
+              background: white;
+              width: ${LABEL_W_MM}mm;
             }
-            @page { margin: 10mm; size: A4; }
+
+            /* Each label fills one physical page exactly */
+            .label {
+              width: ${LABEL_W_MM}mm;
+              height: ${LABEL_H_MM}mm;
+              overflow: hidden;
+              page-break-after: always;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+            }
+
+            .label img {
+              /* Force the image to the exact physical label size.
+                 The PNG was rendered at 300 DPI so this 1:1 mapping 
+                 means every pixel maps to 1/300 inch — crisp bars. */
+              width: ${LABEL_W_MM}mm;
+              height: ${LABEL_H_MM}mm;
+              display: block;
+              image-rendering: pixelated; /* no browser anti-aliasing */
+              -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
+            }
+
+            @page {
+              size: ${LABEL_W_MM}mm ${LABEL_H_MM}mm;
+              margin: 0;
+            }
+
             @media print {
-              body { margin: 0; padding: 0; }
-              .barcode-container { border: none; margin-bottom: 8px; }
+              * {
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+              }
             }
           </style>
         </head>
         <body>
-          ${new Array(qty).fill(singleLabel).join("")}
+          ${new Array(qty).fill(labelImg).join("")}
+          <script>
+            window.onload = function () {
+              // Small delay lets images fully decode before print dialog
+              setTimeout(function () {
+                window.print();
+                window.onafterprint = function () { window.close(); };
+              }, 400);
+            };
+          </script>
         </body>
       </html>
     `;
@@ -144,12 +285,11 @@ export function BarcodeDisplay({ barcode, productName, open, onOpenChange, defau
     printWindow.document.open();
     printWindow.document.write(html);
     printWindow.document.close();
-
-    setTimeout(() => {
-      printWindow.print();
-      printWindow.close();
-    }, 250);
   };
+
+  // Preview canvas display size (CSS pixels, not physical)
+  const previewDisplayW = LABEL_W_MM * 2.5; // ~100px wide preview
+  const previewDisplayH = LABEL_H_MM * 2.5;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -157,28 +297,46 @@ export function BarcodeDisplay({ barcode, productName, open, onOpenChange, defau
         <DialogHeader>
           <DialogTitle>Product Barcode</DialogTitle>
         </DialogHeader>
+
         <div className="flex flex-col items-center gap-4 py-4">
-          <div className="text-sm font-medium">{productName}</div>
-          <div className="border rounded p-4 bg-white">
-            <canvas 
-              ref={canvasRef} 
-              className="max-w-full h-auto"
-              style={{ imageRendering: "pixelated" }}
+          {/* Preview — canvas element, displayed at CSS scale */}
+          <div
+            className="border rounded bg-white shadow-sm overflow-hidden"
+            style={{ width: previewDisplayW, height: previewDisplayH }}
+          >
+            <canvas
+              ref={previewCanvasRef}
+              style={{
+                width: previewDisplayW,
+                height: previewDisplayH,
+                display: "block",
+                imageRendering: "pixelated",
+              }}
             />
           </div>
-          <div className="text-xs text-muted-foreground font-mono">Barcode: {barcode}</div>
+
+          <p className="text-xs text-muted-foreground text-center">
+            Rendered at 300 DPI for sharp thermal printing
+          </p>
+
           <div className="flex items-center gap-2 w-full max-w-[200px]">
-            <label htmlFor="barcode-qty" className="text-sm font-medium whitespace-nowrap">Print quantity</label>
+            <label className="text-sm font-medium whitespace-nowrap">
+              Print quantity
+            </label>
             <Input
-              id="barcode-qty"
               type="number"
               min={1}
               max={999}
               value={printQuantity}
-              onChange={(e) => setPrintQuantity(Math.max(1, Math.min(999, Number(e.target.value) || 1)))}
+              onChange={(e) =>
+                setPrintQuantity(
+                  Math.max(1, Math.min(999, Number(e.target.value) || 1))
+                )
+              }
             />
           </div>
         </div>
+
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Close

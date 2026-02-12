@@ -5,6 +5,7 @@ import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { QueryProvider } from "@/lib/query-client";
 import { SessionProvider } from "@/components/session-provider";
+import { PrinterProvider } from "@/components/PrinterProvider";
 
 export const metadata: Metadata = {
   title: "MN Collection - POS System",
@@ -27,8 +28,11 @@ export default function RootLayout({
             disableTransitionOnChange
           >
             <QueryProvider>
-              {children}
-              <Toaster closeButton position="top-center" />
+              {/* PrinterProvider wraps everything so any page can call usePrinter() */}
+              <PrinterProvider>
+                {children}
+                <Toaster closeButton position="top-center" />
+              </PrinterProvider>
             </QueryProvider>
           </ThemeProvider>
         </SessionProvider>
