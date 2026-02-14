@@ -1,16 +1,29 @@
-import { auth } from "@/auth";
+// import { auth } from "@/auth";
+// import { NextResponse } from "next/server";
+// import type { NextRequest } from "next/server";
+
+// const publicRoutes = ["/login", "/signup", "/forgot-password", "/reset-password"];
+// const authRoutes = ["/login", "/signup"];
+
+// export async function middleware(request: NextRequest) {
+//   const { pathname } = request.nextUrl;
+  
+//   // Get session
+//   const session = await auth();
+//   const isLoggedIn = !!session?.user;
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-const publicRoutes = ["/login", "/signup", "/forgot-password", "/reset-password"];
+const publicRoutes = ["/login", "/signup", "/forgot-password", "/reset-password", "/tenant-setup"];
 const authRoutes = ["/login", "/signup"];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  
-  // Get session
-  const session = await auth();
-  const isLoggedIn = !!session?.user;
+
+  // Check authentication via session cookie (Edge-safe)
+  const sessionCookie = request.cookies.get('authjs.session-token') || 
+                        request.cookies.get('__Secure-authjs.session-token');
+  const isLoggedIn = !!sessionCookie;
 
   // Check if route is public
   const isPublicRoute = publicRoutes.some((route) => pathname.startsWith(route));
