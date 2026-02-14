@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import MainLayout from "@/app/_components/MainLayout";
 import {
@@ -53,7 +53,7 @@ const REASON_OPTIONS = [
   { value: "OTHER", label: "Other" },
 ] as const;
 
-export default function AdjustmentPage() {
+function AdjustmentContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [products, setProducts] = useState<Product[]>([]);
@@ -349,5 +349,13 @@ export default function AdjustmentPage() {
         </form>
       </div>
     </MainLayout>
+  );
+}
+
+export default function AdjustmentPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <AdjustmentContent />
+    </Suspense>
   );
 }

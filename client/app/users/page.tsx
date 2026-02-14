@@ -1,5 +1,5 @@
 "use client"
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import MainLayout from "../_components/MainLayout";
@@ -34,7 +34,7 @@ interface PaginationData {
   totalPages: number;
 }
 
-export default function UsersPage() {
+function UsersContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [users, setUsers] = useState<User[]>([]);
@@ -297,5 +297,13 @@ export default function UsersPage() {
         </AlertDialogContent>
       </AlertDialog>
     </MainLayout>
+  );
+}
+
+export default function UsersPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <UsersContent />
+    </Suspense>
   );
 }

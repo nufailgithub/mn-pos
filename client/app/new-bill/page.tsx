@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import MainLayout from "../_components/MainLayout";
 import { Button } from "@/components/ui/button";
@@ -42,7 +42,7 @@ type BillItem = SaleItemInput & {
   itemSubtotal: number;
 };
 
-export default function NewBillPage() {
+function NewBillContent() {
   const searchParams = useSearchParams();
 
   // ── NEW: get printer from context ─────────────────────────────────────────
@@ -658,5 +658,13 @@ export default function NewBillPage() {
         </Dialog>
       </div>
     </MainLayout>
+  );
+}
+
+export default function NewBillPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <NewBillContent />
+    </Suspense>
   );
 }
